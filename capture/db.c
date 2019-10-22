@@ -1391,6 +1391,7 @@ LOCAL void moloch_db_update_stats(int n, gboolean sync)
     } else {
         char key[200];
         int key_len = snprintf(key, sizeof(key), "/%sdstats/dstat/%s-%d-%d", config.prefix, config.nodeName, (int)(currentTime.tv_sec/intervals[n])%1440, intervals[n]);
+LOG("Send: %.*s", json_len, json);
         moloch_http_send(esServer, "POST", key, key_len, json, json_len, NULL, TRUE, NULL, NULL);
     }
 }
