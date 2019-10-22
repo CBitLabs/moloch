@@ -5700,6 +5700,7 @@ app.get('/:nodeName/session/:id/detail', cspHeader, logAction(), (req, res) => {
 
     let hidePackets = (session.fileId === undefined || session.fileId.length === 0)?"true":"false";
     fixFields(session, () => {
+      console.log('About to start render');
       pug.render(internals.sessionDetailNew, {
         filename    : "sessionDetail",
         user        : req.user,
@@ -5719,6 +5720,7 @@ app.get('/:nodeName/session/:id/detail', cspHeader, logAction(), (req, res) => {
         if (Config.debug > 1) {
           console.log("Detail Rendering", data.replace(/>/g, ">\n"));
         }
+        console.log('rendered');
         res.send(data);
       });
     });

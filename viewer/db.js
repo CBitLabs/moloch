@@ -77,7 +77,8 @@ exports.initialize = function (info, cb) {
     keepAlive: true,
     minSockets: 20,
     maxSockets: 51,
-    ssl: esSSLOptions
+    ssl: esSSLOptions,
+log: 'trace'
   });
 
   internals.elasticSearchClient.info((err,data) => {
