@@ -91,6 +91,7 @@ function processSessionIdS3 (session, headerCb, packetCb, endCb, limit) {
       } else {
         header = data.Body;
       }
+      console.log("Fetched: " + params.Key);
       header = header.subarray(0, 24);
       pcap = Pcap.make(info.name, header);
       if (headerCb) {
@@ -139,6 +140,8 @@ function processSessionIdS3 (session, headerCb, packetCb, endCb, limit) {
 
     // FIrst pass, convert packetPos and packetLen (if we have it) into packetData
     var packetData = [];
+
+console.log("Requested: " + JSON.stringify(fields.packetPos));
 
     async.eachLimit(Object.keys(fields.packetPos), limit || 1, function (p, nextCb) {
       var pos = fields.packetPos[p];
