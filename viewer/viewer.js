@@ -5474,6 +5474,7 @@ function localSessionDetailReturnFull(req, res, session, incoming) {
   if (req.packetsOnly) { // only return packets
     res.render('sessionPackets.pug', {
       filename: 'sessionPackets',
+      cache: true,
       user: req.user,
       session: session,
       data: incoming,
@@ -5700,9 +5701,10 @@ app.get('/:nodeName/session/:id/detail', cspHeader, logAction(), (req, res) => {
 
     let hidePackets = (session.fileId === undefined || session.fileId.length === 0)?"true":"false";
     fixFields(session, () => {
-      console.log('About to start render');
-      pug.render(internals.sessionDetailNew, {
+      console.log('About to create options');
+      var options = {
         filename    : "sessionDetail",
+        cache       : true,
         user        : req.user,
         session     : session,
         Db          : Db,
@@ -5712,7 +5714,10 @@ app.get('/:nodeName/session/:id/detail', cspHeader, logAction(), (req, res) => {
         reqFields   : Config.headers("headers-http-request"),
         resFields   : Config.headers("headers-http-response"),
         emailFields : Config.headers("headers-email")
-      }, function(err, data) {
+      };
+      console.log('About to start render');
+
+      pug.render(internals.sessionDetailNew, options, function(err, data) {
         if (err) {
           console.trace("ERROR - fixFields - ", err);
           return req.next(err);
