@@ -150,6 +150,7 @@ exports.get = function (index, type, id, cb) {
 
 exports.getWithOptions = function (index, type, id, options, cb) {
   var params = {index: fixIndex(index), type:type, id: id};
+  console.log("GetWithOPtions: " + JSON.stringify(params));
   exports.merge(params, options);
   return internals.elasticSearchClient.get(params, cb);
 };

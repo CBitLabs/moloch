@@ -5685,7 +5685,9 @@ function localSessionDetail(req, res) {
  * Get SPI data for a session
  */
 app.get('/:nodeName/session/:id/detail', cspHeader, logAction(), (req, res) => {
+  console.log("/detail");
   Db.getWithOptions(Db.sid2Index(req.params.id), 'session', Db.sid2Id(req.params.id), {}, function(err, session) {
+    console.log("got session data");
     if (err || !session.found) {
       return res.end("Couldn't look up SPI data, error for session " + safeStr(req.params.id) + " Error: " +  err);
     }
