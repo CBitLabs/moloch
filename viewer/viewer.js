@@ -115,7 +115,7 @@ if (internals.elasticBase[0].lastIndexOf('http', 0) !== 0) {
 }
 
 function isProduction() {
-  return app.get('env') == 'production';
+  return app.get('env') === 'production';
 }
 
 function userCleanup(suser) {
