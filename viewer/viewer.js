@@ -860,7 +860,7 @@ function checkCookieToken(req, res, next) {
     return res.molochError(500, 'Missing token');
   }
 
-  req.token = Config.auth2obj(req.headers['x-moloch-cookie']);
+  req.token = Config.auth2obj(req.headers['x-moloch-cookie'], true);
   var diff = Math.abs(Date.now() - req.token.date);
   if (diff > 2400000 || /* req.token.pid !== process.pid || */
       req.token.userId !== req.user.userId) {
@@ -1294,17 +1294,31 @@ function issueAlert (notifierName, alertMessage, continueProcess) {
 }
 
 app.get('/notifierTypes', checkCookieToken, function (req, res) {
-  if (internals.notifiers) {
-    return res.send(internals.notifiers);
+  if (!internals.notifiers) {
+    buildNotifiers();
   }
-
-  buildNotifiers();
 
   return res.send(internals.notifiers);
 });
 
 // get created notifiers
 app.get('/notifiers', checkCookieToken, function (req, res) {
+  function cloneNotifiers(notifiers) {
+    var clone = {};
+
+    for (var key in notifiers) {
+      if (notifiers.hasOwnProperty(key)) {
+        var notifier = notifiers[key];
+        clone[key] = {
+          name: notifier.name,
+          type : notifier.type
+        };
+      }
+    }
+
+    return clone;
+  }
+
   Db.getUser('_moloch_shared', (err, sharedUser) => {
     if (!sharedUser || !sharedUser.found) {
       return res.send({});
@@ -1312,12 +1326,16 @@ app.get('/notifiers', checkCookieToken, function (req, res) {
       sharedUser = sharedUser._source;
     }
 
-    return res.send(sharedUser.notifiers);
+    if (req.user.createEnabled) {
+      return res.send(sharedUser.notifiers);
+    }
+
+    return res.send(cloneNotifiers(sharedUser.notifiers));
   });
 });
 
 // create a new notifier
-app.post('/notifiers', getSettingUser, checkCookieToken, function (req, res) {
+app.post('/notifiers', [noCacheJson, getSettingUser, checkCookieToken], function (req, res) {
   let user = req.settingUser;
   if (!user.createEnabled) {
     return res.molochError(401, 'Need admin privelages to create a notifier');
@@ -1413,7 +1431,7 @@ app.post('/notifiers', getSettingUser, checkCookieToken, function (req, res) {
 });
 
 // update a notifier
-app.put('/notifiers/:name', getSettingUser, checkCookieToken, function (req, res) {
+app.put('/notifiers/:name', [noCacheJson, getSettingUser, checkCookieToken], function (req, res) {
   let user = req.settingUser;
   if (!user.createEnabled) {
     return res.molochError(401, 'Need admin privelages to update a notifier');
@@ -1505,7 +1523,7 @@ app.put('/notifiers/:name', getSettingUser, checkCookieToken, function (req, res
 });
 
 // delete a notifier
-app.delete('/notifiers/:name', getSettingUser, checkCookieToken, function (req, res) {
+app.delete('/notifiers/:name', [noCacheJson, getSettingUser, checkCookieToken], function (req, res) {
   let user = req.settingUser;
   if (!user.createEnabled) {
     return res.molochError(401, 'Need admin privelages to delete a notifier');
@@ -1541,7 +1559,7 @@ app.delete('/notifiers/:name', getSettingUser, checkCookieToken, function (req, 
 });
 
 // test a notifier
-app.post('/notifiers/:name/test', getSettingUser, checkCookieToken, function (req, res) {
+app.post('/notifiers/:name/test', [noCacheJson, getSettingUser, checkCookieToken], function (req, res) {
   let user = req.settingUser;
   if (!user.createEnabled) {
     return res.molochError(401, 'Need admin privelages to test a notifier');
@@ -1558,7 +1576,7 @@ app.post('/notifiers/:name/test', getSettingUser, checkCookieToken, function (re
 });
 
 // gets a user's settings
-app.get('/user/settings', getSettingUser, recordResponseTime, function(req, res) {
+app.get('/user/settings', [noCacheJson, getSettingUser, recordResponseTime], function(req, res) {
   if (!req.settingUser) {
     res.status(404);
     return res.send(JSON.stringify({success:false, text:'User not found'}));
@@ -1579,7 +1597,7 @@ app.get('/user/settings', getSettingUser, recordResponseTime, function(req, res)
 });
 
 // updates a user's settings
-app.post('/user/settings/update', [checkCookieToken, logAction(), postSettingUser], function(req, res) {
+app.post('/user/settings/update', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   req.settingUser.settings = req.body;
@@ -1701,7 +1719,7 @@ function unshareView (req, res, user, sharedUser, endpoint, successMessage, erro
 }
 
 // gets a user's views
-app.get('/user/views', getSettingUser, function(req, res) {
+app.get('/user/views', [noCacheJson, getSettingUser], function(req, res) {
   if (!req.settingUser) { return res.send({}); }
 
   Db.getUser('_moloch_shared', (err, sharedUser) => {
@@ -1723,7 +1741,7 @@ app.get('/user/views', getSettingUser, function(req, res) {
 });
 
 // creates a new view for a user
-app.post('/user/views/create', [checkCookieToken, logAction(), postSettingUser, sanitizeViewName], function (req, res) {
+app.post('/user/views/create', [noCacheJson, checkCookieToken, logAction(), postSettingUser, sanitizeViewName], function (req, res) {
   if (!req.settingUser) {
     console.log('/user/views/create unknown user');
     return res.molochError(403, 'Unknown user');
@@ -1774,7 +1792,7 @@ app.post('/user/views/create', [checkCookieToken, logAction(), postSettingUser, 
 });
 
 // deletes a user's specified view
-app.post('/user/views/delete', [checkCookieToken, logAction(), postSettingUser, sanitizeViewName], function(req, res) {
+app.post('/user/views/delete', [noCacheJson, checkCookieToken, logAction(), postSettingUser, sanitizeViewName], function(req, res) {
   if (!req.settingUser) {
     console.log('/user/views/delete unknown user');
     return res.molochError(403, 'Unknown user');
@@ -1827,7 +1845,7 @@ app.post('/user/views/delete', [checkCookieToken, logAction(), postSettingUser, 
 });
 
 // shares/unshares a view
-app.post('/user/views/toggleShare', [checkCookieToken, logAction(), postSettingUser, sanitizeViewName], function (req, res) {
+app.post('/user/views/toggleShare', [noCacheJson, checkCookieToken, logAction(), postSettingUser, sanitizeViewName], function (req, res) {
   if (!req.body.name)       { return res.molochError(403, 'Missing view name'); }
   if (!req.body.expression) { return res.molochError(403, 'Missing view expression'); }
 
@@ -1873,7 +1891,7 @@ app.post('/user/views/toggleShare', [checkCookieToken, logAction(), postSettingU
 });
 
 // updates a user's specified view
-app.post('/user/views/update', [checkCookieToken, logAction(), postSettingUser, sanitizeViewName], function (req, res) {
+app.post('/user/views/update', [noCacheJson, checkCookieToken, logAction(), postSettingUser, sanitizeViewName], function (req, res) {
   if (!req.body.name)       { return res.molochError(403, 'Missing view name'); }
   if (!req.body.expression) { return res.molochError(403, 'Missing view expression'); }
   if (!req.body.key)        { return res.molochError(403, 'Missing view key'); }
@@ -1947,7 +1965,7 @@ app.post('/user/views/update', [checkCookieToken, logAction(), postSettingUser, 
 });
 
 // gets a user's cron queries
-app.get('/user/cron', getSettingUser, function(req, res) {
+app.get('/user/cron', [noCacheJson, getSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   var user = req.settingUser;
@@ -1971,7 +1989,7 @@ app.get('/user/cron', getSettingUser, function(req, res) {
 });
 
 // creates a new cron query for a user
-app.post('/user/cron/create', [checkCookieToken, logAction(), postSettingUser], function(req, res) {
+app.post('/user/cron/create', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   if (!req.body.name)   { return res.molochError(403, 'Missing cron query name'); }
@@ -2029,7 +2047,7 @@ app.post('/user/cron/create', [checkCookieToken, logAction(), postSettingUser], 
 });
 
 // deletes a user's specified cron query
-app.post('/user/cron/delete', [checkCookieToken, logAction(), postSettingUser], function(req, res) {
+app.post('/user/cron/delete', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   if (!req.body.key) { return res.molochError(403, 'Missing cron query key'); }
@@ -2047,7 +2065,7 @@ app.post('/user/cron/delete', [checkCookieToken, logAction(), postSettingUser], 
 });
 
 // updates a user's specified cron query
-app.post('/user/cron/update', [checkCookieToken, logAction(), postSettingUser], function(req, res) {
+app.post('/user/cron/update', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   if (!req.body.key)    { return res.molochError(403, 'Missing cron query key'); }
@@ -2094,7 +2112,7 @@ app.post('/user/cron/update', [checkCookieToken, logAction(), postSettingUser], 
 });
 
 // changes a user's password
-app.post('/user/password/change', [checkCookieToken, logAction(), postSettingUser], function(req, res) {
+app.post('/user/password/change', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   if (!req.body.newPassword || req.body.newPassword.length < 3) {
@@ -2128,7 +2146,7 @@ function oldDB2newDB(x) {
 }
 
 // gets custom column configurations for a user
-app.get('/user/columns', getSettingUser, function(req, res) {
+app.get('/user/columns', [noCacheJson, getSettingUser], function(req, res) {
   if (!req.settingUser) {return res.send([]);}
 
   // Fix for new names
@@ -2146,7 +2164,7 @@ app.get('/user/columns', getSettingUser, function(req, res) {
 });
 
 // udpates custom column configurations for a user
-app.put('/user/columns/:name', checkCookieToken, logAction(), postSettingUser, function(req, res) {
+app.put('/user/columns/:name', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser)   { return res.molochError(403, 'Unknown user'); }
 
   if (!req.body.name)     { return res.molochError(403, 'Missing custom column configuration name'); }
@@ -2181,7 +2199,7 @@ app.put('/user/columns/:name', checkCookieToken, logAction(), postSettingUser, f
 });
 
 // creates a new custom column configuration for a user
-app.post('/user/columns/create', [checkCookieToken, logAction(), postSettingUser], function(req, res) {
+app.post('/user/columns/create', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   if (!req.body.name)     { return res.molochError(403, 'Missing custom column configuration name'); }
@@ -2223,7 +2241,7 @@ app.post('/user/columns/create', [checkCookieToken, logAction(), postSettingUser
 });
 
 // deletes a user's specified custom column configuration
-app.post('/user/columns/delete', [checkCookieToken, logAction(), postSettingUser], function(req, res) {
+app.post('/user/columns/delete', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   if (!req.body.name) { return res.molochError(403, 'Missing custom column configuration name'); }
@@ -2255,14 +2273,14 @@ app.post('/user/columns/delete', [checkCookieToken, logAction(), postSettingUser
 });
 
 // gets custom spiview fields configurations for a user
-app.get('/user/spiview/fields', getSettingUser, function(req, res) {
+app.get('/user/spiview/fields', [noCacheJson, getSettingUser], function(req, res) {
   if (!req.settingUser) {return res.send([]);}
 
   return res.send(req.settingUser.spiviewFieldConfigs || []);
 });
 
 // udpates custom spiview field configuration for a user
-app.put('/user/spiview/fields/:name', checkCookieToken, logAction(), postSettingUser, function(req, res) {
+app.put('/user/spiview/fields/:name', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) { return res.molochError(403, 'Unknown user'); }
 
   if (!req.body.name)   { return res.molochError(403, 'Missing custom spiview field configuration name'); }
@@ -2296,7 +2314,7 @@ app.put('/user/spiview/fields/:name', checkCookieToken, logAction(), postSetting
 });
 
 // creates a new custom spiview fields configuration for a user
-app.post('/user/spiview/fields/create', [checkCookieToken, logAction(), postSettingUser], function(req, res) {
+app.post('/user/spiview/fields/create', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   if (!req.body.name)   { return res.molochError(403, 'Missing custom spiview field configuration name'); }
@@ -2337,7 +2355,7 @@ app.post('/user/spiview/fields/create', [checkCookieToken, logAction(), postSett
 });
 
 // deletes a user's specified custom spiview fields configuration
-app.post('/user/spiview/fields/delete', [checkCookieToken, logAction(), postSettingUser], function(req, res) {
+app.post('/user/spiview/fields/delete', [noCacheJson, checkCookieToken, logAction(), postSettingUser], function(req, res) {
   if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
 
   if (!req.body.name) { return res.molochError(403, 'Missing custom spiview fields configuration name'); }
@@ -2369,7 +2387,7 @@ app.post('/user/spiview/fields/delete', [checkCookieToken, logAction(), postSett
 });
 
 
-app.get('/decodings', function(req, res) {
+app.get('/decodings', [noCacheJson], function(req, res) {
   var decodeItems = decode.settings();
   res.send(JSON.stringify(decodeItems));
 });
@@ -3038,7 +3056,7 @@ function sessionsListFromIds(req, ids, fields, cb) {
 //////////////////////////////////////////////////////////////////////////////////
 //// APIs
 //////////////////////////////////////////////////////////////////////////////////
-app.get('/history/list', recordResponseTime, function (req, res) {
+app.get('/history/list', [noCacheJson, recordResponseTime], function (req, res) {
   let userId;
   if (req.user.createEnabled) { // user is an admin, they can view all logs
     // if the admin has requested a specific user
@@ -3145,7 +3163,7 @@ app.get('/history/list', recordResponseTime, function (req, res) {
   });
 });
 
-app.delete('/history/list/:id', function (req, res) {
+app.delete('/history/list/:id', [noCacheJson], function (req, res) {
   if (!req.user.createEnabled)  { return res.molochError(403, 'Need admin privileges'); }
   if (!req.user.removeEnabled)  { return res.molochError(403, 'Need remove data privileges'); }
   if (!req.query.index)         { return res.molochError(403, 'Missing history index'); }
@@ -3174,7 +3192,7 @@ app.get('/fields', function(req, res) {
   }
 });
 
-app.get('/file/list', logAction('files'), recordResponseTime, function(req, res) {
+app.get('/file/list', [noCacheJson, logAction('files'), recordResponseTime], function(req, res) {
   if (req.user.hideFiles) { return res.molochError(403, 'Need permission to view files'); }
 
   var columns = ["num", "node", "name", "locked", "first", "filesize"];
@@ -3229,7 +3247,7 @@ app.get('/titleconfig', checkWebEnabled, function(req, res) {
   res.send(titleConfig);
 });
 
-app.get('/molochRightClick', checkWebEnabled, function(req, res) {
+app.get('/molochRightClick', [noCacheJson, checkWebEnabled], function(req, res) {
   if(!app.locals.molochRightClick) {
     res.status(404);
     res.send('Cannot locate right clicks');
@@ -3237,13 +3255,13 @@ app.get('/molochRightClick', checkWebEnabled, function(req, res) {
   res.send(app.locals.molochRightClick);
 });
 
-app.get('/eshealth.json', noCacheJson, function(req, res) {
+app.get('/eshealth.json', [noCacheJson], function(req, res) {
   Db.healthCache(function(err, health) {
     res.send(health);
   });
 });
 
-app.get('/esindices/list', recordResponseTime, function(req, res) {
+app.get('/esindices/list', [noCacheJson, recordResponseTime], function(req, res) {
   if (req.user.hideStats) { return res.molochError(403, 'Need permission to view stats'); }
 
   async.parallel({
@@ -3316,7 +3334,7 @@ app.get('/esindices/list', recordResponseTime, function(req, res) {
   });
 });
 
-app.delete('/esindices/:index', logAction(), checkCookieToken, function(req, res) {
+app.delete('/esindices/:index', [noCacheJson, logAction(), checkCookieToken], function(req, res) {
   if (!req.user.createEnabled) { return res.molochError(403, 'Need admin privileges'); }
 
   if (!req.params.index) {
@@ -3332,7 +3350,7 @@ app.delete('/esindices/:index', logAction(), checkCookieToken, function(req, res
   });
 });
 
-app.post('/esindices/:index/optimize', logAction(), checkCookieToken, function(req, res) {
+app.post('/esindices/:index/optimize', [noCacheJson, logAction(), checkCookieToken], function(req, res) {
   if (!req.user.createEnabled) { return res.molochError(403, 'Need admin privileges'); }
 
   if (!req.params.index) {
@@ -3349,7 +3367,7 @@ app.post('/esindices/:index/optimize', logAction(), checkCookieToken, function(r
   return res.send(JSON.stringify({ success: true, text: {} }));
 });
 
-app.post('/esindices/:index/close', logAction(), checkCookieToken, function(req, res) {
+app.post('/esindices/:index/close', [noCacheJson, logAction(), checkCookieToken], function(req, res) {
   if (!req.user.createEnabled) { return res.molochError(403, 'Need admin privileges'); }
 
   if (!req.params.index) {
@@ -3365,7 +3383,7 @@ app.post('/esindices/:index/close', logAction(), checkCookieToken, function(req,
   });
 });
 
-app.post('/esindices/:index/open', logAction(), checkCookieToken, function(req, res) {
+app.post('/esindices/:index/open', [noCacheJson, logAction(), checkCookieToken], function(req, res) {
   if (!req.user.createEnabled) { return res.molochError(403, 'Need admin privileges'); }
 
   if (!req.params.index) {
@@ -3382,7 +3400,7 @@ app.post('/esindices/:index/open', logAction(), checkCookieToken, function(req, 
   return res.send(JSON.stringify({ success: true, text: {} }));
 });
 
-app.post('/esindices/:index/shrink', logAction(), checkCookieToken, (req, res) => {
+app.post('/esindices/:index/shrink', [noCacheJson, logAction(), checkCookieToken], (req, res) => {
   if (!req.user.createEnabled) { return res.molochError(403, 'Need admin privileges'); }
   if (!req.body || !req.body.target) {
     return res.molochError(403, 'Missing target');
@@ -3435,7 +3453,7 @@ app.post('/esindices/:index/shrink', logAction(), checkCookieToken, (req, res) =
   });
 });
 
-app.get('/estask/list', recordResponseTime, function(req, res) {
+app.get('/estask/list', [noCacheJson, recordResponseTime], function(req, res) {
   if (req.user.hideStats) { return res.molochError(403, 'Need permission to view stats'); }
 
   Db.tasks(function (err, tasks) {
@@ -3511,7 +3529,7 @@ app.get('/estask/list', recordResponseTime, function(req, res) {
   });
 });
 
-app.post('/estask/cancel', logAction(), function(req, res) {
+app.post('/estask/cancel', [noCacheJson, logAction()], function(req, res) {
   if (!req.user.createEnabled) { return res.molochError(403, 'Need admin privileges'); }
 
   if (!req.body || !req.body.taskId) {
@@ -3523,7 +3541,7 @@ app.post('/estask/cancel', logAction(), function(req, res) {
   });
 });
 
-app.post('/estask/cancelById', logAction(), function(req, res) {
+app.post('/estask/cancelById', [noCacheJson, logAction()], function(req, res) {
   if (!req.body || !req.body.cancelId) {
     return res.molochError(403, 'Missing cancel ID');
   }
@@ -3533,7 +3551,7 @@ app.post('/estask/cancelById', logAction(), function(req, res) {
   });
 });
 
-app.get('/esshard/list', recordResponseTime, function(req, res) {
+app.get('/esshard/list', [noCacheJson, recordResponseTime], function(req, res) {
   if (req.user.hideStats) { return res.molochError(403, 'Need permission to view stats'); }
 
   Promise.all([Db.shards(),
@@ -3601,7 +3619,7 @@ app.get('/esshard/list', recordResponseTime, function(req, res) {
   });
 });
 
-app.post('/esshard/exclude/:type/:value', logAction(), checkCookieToken, function(req, res) {
+app.post('/esshard/exclude/:type/:value', [noCacheJson, logAction(), checkCookieToken], function(req, res) {
   if (!req.user.createEnabled) { return res.molochError(403, "Need admin privileges"); }
   if (Config.get("multiES", false)) { return res.molochError(401, "Not supported in multies"); }
 
@@ -3634,7 +3652,7 @@ app.post('/esshard/exclude/:type/:value', logAction(), checkCookieToken, functio
   });
 });
 
-app.post('/esshard/include/:type/:value', logAction(), checkCookieToken, function(req, res) {
+app.post('/esshard/include/:type/:value', [noCacheJson, logAction(), checkCookieToken], function(req, res) {
   if (!req.user.createEnabled) { return res.molochError(403, "Need admin privileges"); }
   if (Config.get("multiES", false)) { return res.molochError(401, "Not supported in multies"); }
 
@@ -3668,7 +3686,7 @@ app.post('/esshard/include/:type/:value', logAction(), checkCookieToken, functio
   });
 });
 
-app.get('/esrecovery/list', recordResponseTime, function(req, res) {
+app.get('/esrecovery/list', [noCacheJson, recordResponseTime], function(req, res) {
   if (req.user.hideStats) { return res.molochError(403, 'Need permission to view stats'); }
 
   const sortField = (req.query.sortField || 'index') + (req.query.desc === 'true' ? ':desc' : '');
@@ -3713,7 +3731,7 @@ app.get('/esrecovery/list', recordResponseTime, function(req, res) {
   });
 });
 
-app.get('/esstats.json', recordResponseTime, noCacheJson, function(req, res) {
+app.get('/esstats.json', [noCacheJson, recordResponseTime], function(req, res) {
   if (req.user.hideStats) { return res.molochError(403, 'Need permission to view stats'); }
 
   let stats = [];
@@ -3863,7 +3881,7 @@ function mergeUnarray(to, from) {
   }
 }
 
-app.get('/parliament.json', noCacheJson, function (req, res) {
+app.get('/parliament.json', [noCacheJson], function (req, res) {
   let query = {
     size: 500,
     _source: [
@@ -3911,7 +3929,7 @@ app.get('/parliament.json', noCacheJson, function (req, res) {
     });
 });
 
-app.get('/stats.json', recordResponseTime, noCacheJson, function(req, res) {
+app.get('/stats.json', [noCacheJson, recordResponseTime], function(req, res) {
   if (req.user.hideStats) { return res.molochError(403, 'Need permission to view stats'); }
 
   let query = {
@@ -4043,7 +4061,7 @@ app.get('/stats.json', recordResponseTime, noCacheJson, function(req, res) {
   });
 });
 
-app.get('/dstats.json', noCacheJson, function(req, res) {
+app.get('/dstats.json', [noCacheJson], function(req, res) {
   if (req.user.hideStats) { return res.molochError(403, 'Need permission to view stats'); }
 
   var nodeName = req.query.nodeName;
@@ -4150,7 +4168,7 @@ app.get('/dstats.json', noCacheJson, function(req, res) {
   });
 });
 
-app.get('/:nodeName/:fileNum/filesize.json', noCacheJson, function(req, res) {
+app.get('/:nodeName/:fileNum/filesize.json', [noCacheJson], function(req, res) {
   Db.fileIdToFile(req.params.nodeName, req.params.fileNum, function(file) {
     if (!file) {
       return res.send({filesize: -1});
@@ -4303,7 +4321,7 @@ function flattenFields(fields) {
   return fields;
 }
 
-app.use('/buildQuery.json', logAction('query'), noCacheJson, function(req, res, next) {
+app.use('/buildQuery.json', [noCacheJson, logAction('query')], function(req, res, next) {
 
   if (req.method === "POST") {
     req.query = req.body;
@@ -4328,7 +4346,7 @@ app.use('/buildQuery.json', logAction('query'), noCacheJson, function(req, res, 
   });
 });
 
-app.get('/sessions.json', logAction('sessions'), recordResponseTime, noCacheJson, function (req, res) {
+app.get('/sessions.json', [noCacheJson, logAction('sessions'), recordResponseTime], function (req, res) {
   var graph = {};
   var map = {};
 
@@ -4443,7 +4461,7 @@ app.get('/sessions.json', logAction('sessions'), recordResponseTime, noCacheJson
   });
 });
 
-app.get('/spigraph.json', logAction('spigraph'), fieldToExp, recordResponseTime, noCacheJson, function(req, res) {
+app.get('/spigraph.json', [noCacheJson, logAction('spigraph'), fieldToExp, recordResponseTime], function(req, res) {
   req.query.facets = 1;
 
   buildSessionQuery(req, function(bsqErr, query, indices) {
@@ -4596,7 +4614,7 @@ app.get('/spigraph.json', logAction('spigraph'), fieldToExp, recordResponseTime,
   });
 });
 
-app.get('/spiview.json', logAction('spiview'), recordResponseTime, noCacheJson, function(req, res) {
+app.get('/spiview.json', [noCacheJson, logAction('spiview'), recordResponseTime], function(req, res) {
 
   if (req.query.spi === undefined) {
     return res.send({spi:{}, recordsTotal: 0, recordsFiltered: 0});
@@ -4758,7 +4776,7 @@ app.get('/spiview.json', logAction('spiview'), recordResponseTime, noCacheJson, 
   });
 });
 
-app.get('/dns.json', logAction(), noCacheJson, function(req, res) {
+app.get('/dns.json', [noCacheJson, logAction()], function(req, res) {
   console.log("dns.json", req.query);
   dns.reverse(req.query.ip, function (err, data) {
     if (err) {
@@ -4955,7 +4973,7 @@ function buildConnections(req, res, cb) {
   });
 }
 
-app.get('/connections.json', logAction('connections'), recordResponseTime, function (req, res) {
+app.get('/connections.json', [noCacheJson, logAction('connections'), recordResponseTime], function (req, res) {
   let health;
   Db.healthCache(function (err, h) { health = h; });
   buildConnections(req, res, function (err, nodes, links, total) {
@@ -5167,7 +5185,7 @@ app.get('/multiunique.txt', logAction(), function(req, res) {
   });
 });
 
-app.get('/unique.txt', logAction(), fieldToExp, function(req, res) {
+app.get('/unique.txt', [logAction(), fieldToExp], function(req, res) {
   noCache(req, res, 'text/plain; charset=utf-8');
 
   if (req.query.field === undefined && req.query.exp === undefined) {
@@ -6255,7 +6273,7 @@ internals.usersMissing = {
   lastUsed: 0
 };
 
-app.post('/user/list', logAction('users'), recordResponseTime, function (req, res) {
+app.post('/user/list', [noCacheJson, logAction('users'), recordResponseTime], function (req, res) {
   if (!req.user.createEnabled) {return res.molochError(404, 'Need admin privileges');}
 
   let columns = [ 'userId', 'userName', 'expression', 'enabled', 'createEnabled',
@@ -6316,7 +6334,7 @@ app.post('/user/list', logAction('users'), recordResponseTime, function (req, re
   });
 });
 
-app.post('/user/create', logAction(), checkCookieToken, function(req, res) {
+app.post('/user/create', [noCacheJson, logAction(), checkCookieToken], function(req, res) {
   if (!req.user.createEnabled) { return res.molochError(403, 'Need admin privileges'); }
 
   if (!req.body || !req.body.userId || !req.body.userName || !req.body.password) {
@@ -6369,7 +6387,7 @@ app.post('/user/create', logAction(), checkCookieToken, function(req, res) {
   });
 });
 
-app.put('/user/:userId/acknowledgeMsg', logAction(), checkCookieToken, function (req, res) {
+app.put('/user/:userId/acknowledgeMsg', [noCacheJson, logAction(), checkCookieToken], function (req, res) {
   if (!req.body.msgNum) {
     return res.molochError(403, 'Message number required');
   }
@@ -6395,7 +6413,7 @@ app.put('/user/:userId/acknowledgeMsg', logAction(), checkCookieToken, function 
   });
 });
 
-app.post('/user/delete', logAction(), checkCookieToken, function(req, res) {
+app.post('/user/delete', [noCacheJson, logAction(), checkCookieToken], function(req, res) {
   if (!req.user.createEnabled) {
     return res.molochError(403, 'Need admin privileges');
   }
@@ -6411,7 +6429,7 @@ app.post('/user/delete', logAction(), checkCookieToken, function(req, res) {
   });
 });
 
-app.post('/user/update', logAction(), checkCookieToken, postSettingUser, function(req, res) {
+app.post('/user/update', [noCacheJson, logAction(), checkCookieToken, postSettingUser], function(req, res) {
   if (!req.user.createEnabled) {
     return res.molochError(403, 'Need admin privileges');
   }
@@ -6475,7 +6493,7 @@ app.post('/user/update', logAction(), checkCookieToken, postSettingUser, functio
   });
 });
 
-app.post('/state/:name', logAction(), function(req, res) {
+app.post('/state/:name', [noCacheJson, logAction()], function(req, res) {
   Db.getUser(req.user.userId, function(err, user) {
     if (err || !user.found) {
       console.log("save state failed", err, user);
@@ -6497,7 +6515,7 @@ app.post('/state/:name', logAction(), function(req, res) {
   });
 });
 
-app.get('/state/:name', function(req, res) {
+app.get('/state/:name', [noCacheJson], function(req, res) {
   if (!req.user.tableStates || !req.user.tableStates[req.params.name]) {
     return res.send("{}");
   }
@@ -6505,7 +6523,9 @@ app.get('/state/:name', function(req, res) {
   // Fix for new names
   if (req.params.name === "sessionsNew" && req.user.tableStates && req.user.tableStates.sessionsNew) {
     let item = req.user.tableStates.sessionsNew;
-    item.visibleHeaders = item.visibleHeaders.map(oldDB2newDB);
+    if (item.visibleHeaders) {
+      item.visibleHeaders = item.visibleHeaders.map(oldDB2newDB);
+    }
     if (item.order && item.order.length > 0) {
       item.order[0][0] = oldDB2newDB(item.order[0][0]);
     }
@@ -6560,7 +6580,7 @@ function removeTagsList(res, allTagNames, sessionList) {
   });
 }
 
-app.post('/addTags', logAction(), function(req, res) {
+app.post('/addTags', [noCacheJson, logAction()], function(req, res) {
   var tags = [];
   if (req.body.tags) {
     tags = req.body.tags.replace(/[^-a-zA-Z0-9_:,]/g, "").split(",");
@@ -6591,7 +6611,7 @@ app.post('/addTags', logAction(), function(req, res) {
   }
 });
 
-app.post('/removeTags', logAction(), function(req, res) {
+app.post('/removeTags', [noCacheJson, logAction()], function(req, res) {
   if (!req.user.removeEnabled) { return res.molochError(403, "Need remove data privileges"); }
 
   var tags = [];
@@ -7093,7 +7113,7 @@ function updateHuntStatus (req, res, status, successText, errorText) {
   });
 }
 
-app.post('/hunt', logAction('hunt'), checkCookieToken, function (req, res) {
+app.post('/hunt', [noCacheJson, logAction('hunt'), checkCookieToken], function (req, res) {
   // make sure viewer is not multi and user has permission
   if (Config.get('multiES', false)) { return res.molochError(401, 'Not supported in multies'); }
   if (!req.user.packetSearch) { return res.molochError(403, 'Need packet search privileges'); }
@@ -7152,7 +7172,7 @@ app.post('/hunt', logAction('hunt'), checkCookieToken, function (req, res) {
   });
 });
 
-app.get('/hunt/list', recordResponseTime, function (req, res) {
+app.get('/hunt/list', [noCacheJson, recordResponseTime], function (req, res) {
   if (Config.get('multiES', false)) { return res.molochError(401, 'Not supported in multies'); }
   if (!req.user.packetSearch) { return res.molochError(403, 'Need packet search privileges'); }
 
@@ -7220,7 +7240,7 @@ app.get('/hunt/list', recordResponseTime, function (req, res) {
     });
 });
 
-app.delete('/hunt/:id', logAction('hunt/:id'), checkCookieToken, checkHuntAccess, function (req, res) {
+app.delete('/hunt/:id', [noCacheJson, logAction('hunt/:id'), checkCookieToken, checkHuntAccess], function (req, res) {
   if (Config.get('multiES', false)) { return res.molochError(401, 'Not supported in multies'); }
   if (!req.user.packetSearch) { return res.molochError(403, 'Need packet search privileges'); }
 
@@ -7234,19 +7254,19 @@ app.delete('/hunt/:id', logAction('hunt/:id'), checkCookieToken, checkHuntAccess
   });
 });
 
-app.put('/hunt/:id/pause', logAction('hunt/:id/pause'), checkCookieToken, checkHuntAccess, function (req, res) {
+app.put('/hunt/:id/pause', [noCacheJson, logAction('hunt/:id/pause'), checkCookieToken, checkHuntAccess], function (req, res) {
   if (Config.get('multiES', false)) { return res.molochError(401, 'Not supported in multies'); }
   if (!req.user.packetSearch) { return res.molochError(403, 'Need packet search privileges'); }
   updateHuntStatus(req, res, 'paused', 'Paused hunt item successfully', 'Error pausing hunt job');
 });
 
-app.put('/hunt/:id/play', logAction('hunt/:id/play'), checkCookieToken, checkHuntAccess, function (req, res) {
+app.put('/hunt/:id/play', [noCacheJson, logAction('hunt/:id/play'), checkCookieToken, checkHuntAccess], function (req, res) {
   if (Config.get('multiES', false)) { return res.molochError(401, 'Not supported in multies'); }
   if (!req.user.packetSearch) { return res.molochError(403, 'Need packet search privileges'); }
   updateHuntStatus(req, res, 'queued', 'Queued hunt item successfully', 'Error starting hunt job');
 });
 
-app.get('/:nodeName/hunt/:huntId/remote/:sessionId', function (req, res) {
+app.get('/:nodeName/hunt/:huntId/remote/:sessionId', [noCacheJson], function (req, res) {
   let huntId = req.params.huntId;
   let sessionId = req.params.sessionId;
 
@@ -7282,7 +7302,7 @@ app.get('/:nodeName/hunt/:huntId/remote/:sessionId', function (req, res) {
 //////////////////////////////////////////////////////////////////////////////////
 //// Lookups
 //////////////////////////////////////////////////////////////////////////////////
-app.get('/lookups', getSettingUser, recordResponseTime, function (req, res) {
+app.get('/lookups', [noCacheJson, getSettingUser, recordResponseTime], function (req, res) {
   // return nothing if we can't find the user
   const user = req.settingUser;
   if (!user) { return res.send({}); }
@@ -7293,10 +7313,17 @@ app.get('/lookups', getSettingUser, recordResponseTime, function (req, res) {
   let query = {
     query: {
       bool: {
-        should: [
-          { term: { shared: true } },
-          { term: { userId: req.settingUser.userId } }
+        must: [
+          {
+            bool: {
+              should: [
+                { term: { shared: true } },
+                { term: { userId: req.settingUser.userId } }
+              ]
+            }
+          }
         ]
+
       }
     },
     sort: {},
@@ -7309,9 +7336,9 @@ app.get('/lookups', getSettingUser, recordResponseTime, function (req, res) {
   };
 
   if (req.query.searchTerm) {
-    query.query.bool.must = [{
+    query.query.bool.must.push({
       wildcard: { name: '*' + req.query.searchTerm + '*' }
-    }];
+    });
   }
 
   // if fieldType exists, filter it
@@ -7319,9 +7346,9 @@ app.get('/lookups', getSettingUser, recordResponseTime, function (req, res) {
     const fieldType = internals.lookupTypeMap[req.query.fieldType];
 
     if (fieldType) {
-      query.query.bool.must = [{
+      query.query.bool.must.push({
         exists: { field: fieldType }
-      }];
+      });
     }
   }
 
@@ -7390,7 +7417,7 @@ function createLookupsArray (lookupsString) {
   return values;
 }
 
-app.post('/lookups', getSettingUser, logAction('lookups'), checkCookieToken, function (req, res) {
+app.post('/lookups', [noCacheJson, getSettingUser, logAction('lookups'), checkCookieToken], function (req, res) {
   // make sure all the necessary data is included in the post body
   if (!req.body.var) { return res.molochError(403, 'Missing shortcut'); }
   if (!req.body.var.name) { return res.molochError(403, 'Missing shortcut name'); }
@@ -7453,7 +7480,7 @@ app.post('/lookups', getSettingUser, logAction('lookups'), checkCookieToken, fun
     });
 });
 
-app.put('/lookups/:id', getSettingUser, logAction('lookups/:id'), checkCookieToken, function (req, res) {
+app.put('/lookups/:id', [noCacheJson, getSettingUser, logAction('lookups/:id'), checkCookieToken], function (req, res) {
   // make sure all the necessary data is included in the post body
   if (!req.body.var) { return res.molochError(403, 'Missing shortcut'); }
   if (!req.body.var.name) { return res.molochError(403, 'Missing shortcut name'); }
@@ -7502,7 +7529,7 @@ app.put('/lookups/:id', getSettingUser, logAction('lookups/:id'), checkCookieTok
   });
 });
 
-app.delete('/lookups/:id', getSettingUser, logAction('lookups/:id'), checkCookieToken, function (req, res) {
+app.delete('/lookups/:id', [noCacheJson, getSettingUser, logAction('lookups/:id'), checkCookieToken], function (req, res) {
   Db.getLookup(req.params.id, (err, variable) => { // fetch variable
     if (err) {
       console.log('fetching shortcut to delete failed', err, variable);
@@ -7626,10 +7653,10 @@ function pcapScrub(req, res, sid, whatToRemove, endCb) {
   });
 }
 
-app.get('/:nodeName/delete/:whatToRemove/:sid', checkProxyRequest, function (req, res) {
+app.get('/:nodeName/delete/:whatToRemove/:sid', [checkProxyRequest], function (req, res) {
+  noCache(req, res);
   if (!req.user.removeEnabled) { return res.molochError(200, 'Need remove data privileges'); }
 
-  noCache(req, res);
   res.statusCode = 200;
 
   pcapScrub(req, res, req.params.sid, req.params.whatToRemove, function (err) {
@@ -7667,7 +7694,7 @@ function scrubList(req, res, whatToRemove, list) {
   });
 }
 
-app.post('/delete', [checkCookieToken, logAction()], function (req, res) {
+app.post('/delete', [noCacheJson, checkCookieToken, logAction()], function (req, res) {
   if (!req.user.removeEnabled) { return res.molochError(403, 'Need remove data privileges'); }
 
   if (req.query.removeSpi !== 'true' && req.query.removePcap !== 'true') {
@@ -7968,7 +7995,7 @@ function sendSessionsListQL(pOptions, list, nextQLCb) {
   });
 }
 
-app.post('/receiveSession', function receiveSession(req, res) {
+app.post('/receiveSession', [noCacheJson], function receiveSession(req, res) {
   if (!req.query.saveId) { return res.molochError(200, "Missing saveId"); }
 
   // JS Static Variable :)
