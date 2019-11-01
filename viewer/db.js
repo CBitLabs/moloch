@@ -1148,6 +1148,7 @@ exports.getIndices = function(startTime, stopTime, rotateIndex, cb) {
       } else if (index[2] === 'm') {
         month = (+index[3])*10 + (+index[4]);
         length = 31*24*60*60;
+        day = 1;
       } else if (index.length === 6) {
         month = (+index[2])*10 + (+index[3]);
         day = (+index[4])*10 + (+index[5]);
