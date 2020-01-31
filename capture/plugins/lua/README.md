@@ -41,6 +41,17 @@ Generic body feed function
 * session = A MolochSession object
 * data = A MolochData object with the next chunk of binary data
 
+### httpCallbackFunction(session, data, direction)
+Generic http callback function
+* session = A MolochSession object
+* data = A MolochData object with the next chunk of data (or nil if not applicable)
+* direction = 0 if this is a Request, 1 if this is a Response
+
+### saveCallbackFunction(session, final)
+Generic save callback function
+* session = A MolochSession object
+* final = boolean if this is the final save or not
+
 ## Moloch
 Moloch.expression_to_fieldId(fieldExpression)
 Look up a field expression and return the fieldId
@@ -48,7 +59,7 @@ Look up a field expression and return the fieldId
 * returns = the fieldId
 
 ## MolochData
-A MolochData object is a wrapper for a C string that has access to pcre and other commands.  The main purpose is so we don't have to copy strings back and forth from lua and C.  The object can NOT be saved in a table or used in a closure directly, however a :copy version can be.
+A MolochData object is a wrapper for a C string that has access to pcre and other commands.  The main purpose is so we don't have to copy strings back and forth from lua and C.  The object can NOT be saved in a table or used in a closure directly, however a :copy version can be. It will throw an error if this rule is violated.
 ### MolochData.pcre_create(str)
 Create a PCRE pattern to use for matching
 * str = the expression
@@ -110,19 +121,39 @@ Add a UDP classifier to match initial session packets against.
 ### MolochSession.register_body_feed(type, bodyFeedFunctionName)
 Register to receive a feed of chunks of data from payload bodies
 * type = The type of body feed to receive ("http", "smtp")
-* bodyFeedFunctionName = the string name of the lua function to call.  Function should implmenet that bodyFeedFunction signature above.
+* bodyFeedFunctionName = the string name of the lua function to call.  Function should implement the bodyFeedFunction signature above.
 
+### MolochSession.http_on(type, httpCallbackFunctionName)
+Register to receive a feed of data from the http parser. There are eight different types of callback.
+* type = the type of callback to register. This should be one of the constants:
+  - MolochSession.HTTP.MESSAGE_BEGIN
+  - MolochSession.HTTP.URL
+  - MolochSession.HTTP.HEADER_FIELD
+  - MolochSession.HTTP.HEADER_FIELD_RAW -- this is just like HEADER_FIELD except that the string is not lower-cased.
+  - MolochSession.HTTP.HEADER_VALUE
+  - MolochSession.HTTP.HEADERS_COMPLETE
+  - MolochSession.HTTP.BODY
+  - MolochSession.HTTP.MESSAGE_COMPLETE
+* httpCallbackFunctionName = the string name of the lua function to call.  Function should implement the httpCallbackFunction signature above. If there is no data (HEADERS_COMPLETE, MESSAGE_COMPLETE) then the data argument will be nil and can be ignored. The method string is passed into the MESSAGE_BEGIN callback on the request side.
+
+### MolochSession.register_pre_save(preSaveFunctionName)
+Register to receive a callback before saving.  This function can call the incr_outstanding on the session to pause the save.
+* preSaveFunctionName = the string name of the lua function to call.  Function should implement the saveCallbackFunction signature above.
+
+### MolochSession.register_save(saveFunctionName)
+Register to receive a callback as saving.  This function can NOT call the incr_outstanding on the session to pause the save.
+* saveFunctionName = the string name of the lua function to call.  Function should implement the saveCallbackFunction signature above.
 
 
 ### session:add_string(fieldExpressionOrFieldId, value)
 Add a string value to a session
-* fieldExpressionOrFieldId = the field expression or a fieldId
+* fieldExpressionOrFieldId = the field expression or a fieldId.
 * value = the string to add
 * returns = true if added, false if already there
 
 ### session:add_int(fieldexpressionOrFieldId, value)
 Add a integer value to a session
-* fieldExpressionOrFieldId = the field expression or a fieldId
+* fieldExpressionOrFieldId = the field expression or a fieldId.
 * value = the string to add
 * returns = true if added, false if already there
 
@@ -151,8 +182,23 @@ Used usually inside a classify callback this function registers that the entire 
 * function = the lua function to call with all the data.  Function should implement the parserFunction signature above.
 
 ### session:table()
-Return a table that can be used to set/get lua variables to share state across all callbacks for session
+Return a table that can be used to set/get lua variables to share state across all callbacks for a session
 * returns = a lua table
+
+### session.ipProtocol
+Returns a string containing the protocol.
+
+### session.srcIp
+Returns a string containing the source IP address.
+
+### session.dstIp
+Returns a string containing the destination IP address.
+
+### session.srcPort
+Returns the source port as a number.
+
+### session.dstPort
+Returns the destination port as a number.
 
 
 ## MolochHttpService

@@ -472,8 +472,8 @@ void moloch_config_load()
     config.emailYara        = moloch_config_str(keyfile, "emailYara", NULL);
     config.rirFile          = moloch_config_str(keyfile, "rirFile", NULL);
     config.ouiFile          = moloch_config_str(keyfile, "ouiFile", NULL);
-    config.geoLite2ASN      = moloch_config_str(keyfile, "geoLite2ASN", "/data/moloch/etc/GeoLite2-ASN.mmdb");
-    config.geoLite2Country  = moloch_config_str(keyfile, "geoLite2Country", "/data/moloch/etc/GeoLite2-Country.mmdb");
+    config.geoLite2ASN      = moloch_config_str_list(keyfile, "geoLite2ASN", "/usr/share/GeoIP/GeoLite2-ASN.mmdb;/data/moloch/etc/GeoLite2-ASN.mmdb");
+    config.geoLite2Country  = moloch_config_str_list(keyfile, "geoLite2Country", "/usr/share/GeoIP/GeoLite2-Country.mmdb;/data/moloch/etc/GeoLite2-Country.mmdb");
     config.dropUser         = moloch_config_str(keyfile, "dropUser", NULL);
     config.dropGroup        = moloch_config_str(keyfile, "dropGroup", NULL);
     config.pluginsDir       = moloch_config_str_list(keyfile, "pluginsDir", NULL);
@@ -808,7 +808,7 @@ typedef struct {
 LOCAL int                numFiles;
 LOCAL MolochFileChange_t files[MOLOCH_CONFIG_FILES];
 /******************************************************************************/
-void moloch_config_monitor_file(char *desc, char *name, MolochFileChange_cb cb)
+void moloch_config_monitor_file_msg(char *desc, char *name, MolochFileChange_cb cb, const char *msg)
 {
     struct stat     sb;
 
@@ -816,7 +816,7 @@ void moloch_config_monitor_file(char *desc, char *name, MolochFileChange_cb cb)
         LOGEXIT("Couldn't monitor anymore files %s %s", desc, name);
 
     if (stat(name, &sb) != 0) {
-        LOGEXIT("Couldn't stat %s file %s error %s", desc, name, strerror(errno));
+        LOGEXIT("Couldn't stat %s file %s error %s. %s", desc, name, strerror(errno), msg);
     }
 
     files[numFiles].name[0] = g_strdup(name);
@@ -828,6 +828,11 @@ void moloch_config_monitor_file(char *desc, char *name, MolochFileChange_cb cb)
 
     numFiles++;
     cb(name);
+}
+/******************************************************************************/
+void moloch_config_monitor_file(char *desc, char *name, MolochFileChange_cb cb)
+{
+    moloch_config_monitor_file_msg(desc, name, cb, "");
 }
 /******************************************************************************/
 void moloch_config_monitor_files(char *desc, char **names, MolochFilesChange_cb cb)

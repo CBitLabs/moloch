@@ -29,8 +29,8 @@
 #include "patricia.h"
 
 #include "maxminddb.h"
-MMDB_s                  *geoCountry;
-MMDB_s                  *geoASN;
+LOCAL MMDB_s           *geoCountry;
+LOCAL MMDB_s           *geoASN;
 
 #define MOLOCH_MIN_DB_VERSION 50
 
@@ -222,7 +222,7 @@ void moloch_db_geo_lookup6(MolochSession_t *session, struct in6_addr addr, char 
 
 
     int error = 0;
-    if (!*g) {
+    if (!*g && geoCountry) {
         MMDB_lookup_result_s result = MMDB_lookup_sockaddr(geoCountry, sa, &error);
         if (error == MMDB_SUCCESS && result.found_entry) {
             MMDB_entry_data_s entry_data;
@@ -235,7 +235,7 @@ void moloch_db_geo_lookup6(MolochSession_t *session, struct in6_addr addr, char 
         }
     }
 
-    if (!*as) {
+    if (!*as && geoASN) {
         MMDB_lookup_result_s result = MMDB_lookup_sockaddr(geoASN, sa, &error);
         if (error == MMDB_SUCCESS && result.found_entry) {
             MMDB_entry_data_s org;
@@ -942,8 +942,12 @@ void moloch_db_save_session(MolochSession_t *session, int final)
             HASH_FORALL_POP_HEAD(t_, *cihash, certs,
                 BSB_EXPORT_u08(jbsb, '{');
 
-
                 BSB_EXPORT_sprintf(jbsb, "\"hash\":\"%s\",", certs->hash);
+
+                if (certs->publicAlgorithm)
+                    BSB_EXPORT_sprintf(jbsb, "\"publicAlgorithm\":\"%s\",", certs->publicAlgorithm);
+                if (certs->curve)
+                    BSB_EXPORT_sprintf(jbsb, "\"curve\":\"%s\",", certs->curve);
 
                 SAVE_STRING_HEAD(certs->issuer.commonName, "issuerCN");
                 SAVE_STRING_HEAD(certs->issuer.orgName, "issuerON");
@@ -1525,6 +1529,9 @@ uint32_t moloch_db_get_sequence_number_sync(char *name)
 
         if (!version_len || !version) {
             LOG("ERROR - Couldn't fetch sequence: %d %.*s", (int)data_len, (int)data_len, data);
+            if (strstr((char *)data, "FORBIDDEN") != 0) {
+                LOG("You have most likely run out of space on an elasticsearch node, see https://molo.ch/faq#recommended-elasticsearch-settings on setting disk watermarks and how to clear the elasticsearch error");
+            }
             free(data);
             continue;
         } else {
@@ -2198,7 +2205,7 @@ gboolean moloch_db_file_exists(const char *filename, uint32_t *outputId)
     char                   key[2000];
     int                    key_len;
 
-    key_len = snprintf(key, sizeof(key), "/%sfiles/file/_search?size=1&sort=num:desc&q=node:%s+AND+name:\"%s\"", config.prefix, config.nodeName, filename);
+    key_len = snprintf(key, sizeof(key), "/%sfiles/file/_search?rest_total_hits_as_int&size=1&sort=num:desc&q=node:%s+AND+name:\"%s\"", config.prefix, config.nodeName, filename);
 
     unsigned char *data = moloch_http_get(esServer, key, key_len, &data_len);
 
@@ -2312,9 +2319,7 @@ void moloch_db_init()
     }
     if (!config.dryRun) {
         esServer = moloch_http_create_server(config.elasticsearch, config.maxESConns, config.maxESRequests, config.compressES);
-        static char *headers[2];
-        headers[0] = "Content-Type: application/json";
-        headers[1] = NULL;
+        static char *headers[] = {"Content-Type: application/json", "Expect:", NULL};
         moloch_http_set_headers(esServer, headers);
         moloch_http_set_print_errors(esServer);
 
@@ -2336,12 +2341,36 @@ void moloch_db_init()
 
     moloch_add_can_quit(moloch_db_can_quit, "DB");
 
-    moloch_config_monitor_file("country file", config.geoLite2Country, moloch_db_load_geo_country);
-    moloch_config_monitor_file("asn file", config.geoLite2ASN, moloch_db_load_geo_asn);
+    // Find the first geo file that exists in our list and use that one.
+    // If none could be loaded, and setting not blank, print out warning
+    struct stat     sb;
+    int             i;
+    if (config.geoLite2Country && config.geoLite2Country[0]) {
+        for (i = 0; config.geoLite2Country[i]; i++) {
+            if (stat(config.geoLite2Country[i], &sb) == 0) {
+                moloch_config_monitor_file("country file", config.geoLite2Country[i], moloch_db_load_geo_country);
+                break;
+            }
+        }
+        if (!config.geoLite2Country[i]) {
+            LOG("WARNING - No Geo Country file could be loaded, see https://molo.ch/settings#geolite2country");
+        }
+    }
+    if (config.geoLite2ASN && config.geoLite2ASN[0]) {
+        for (i = 0; config.geoLite2ASN[i]; i++) {
+            if (stat(config.geoLite2ASN[i], &sb) == 0) {
+                moloch_config_monitor_file("asn file", config.geoLite2ASN[i], moloch_db_load_geo_asn);
+                break;
+            }
+        }
+        if (!config.geoLite2ASN[i]) {
+            LOG("WARNING - No Geo ASN file could be loaded, see https://molo.ch/settings#geolite2asn");
+        }
+    }
     if (config.ouiFile)
-        moloch_config_monitor_file("oui file", config.ouiFile, moloch_db_load_oui);
+        moloch_config_monitor_file_msg("oui file", config.ouiFile, moloch_db_load_oui, "Maybe try running /data/moloch/bin/moloch_update_geo.sh");
     if (config.rirFile)
-        moloch_config_monitor_file("rir file", config.rirFile, moloch_db_load_rir);
+        moloch_config_monitor_file_msg("rir file", config.rirFile, moloch_db_load_rir, "Maybe try running /data/moloch/bin/moloch_update_geo.sh");
 
     if (!config.dryRun) {
         int t = 0;
