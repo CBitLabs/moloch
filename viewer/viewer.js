@@ -18,63 +18,67 @@
 'use strict';
 
 const MIN_DB_VERSION = 62;
-
-//// Modules
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// Modules
+// ----------------------------------------------------------------------------
 try {
-var Config         = require('./config.js'),
-    express        = require('express'),
-    stylus         = require('stylus'),
-    util           = require('util'),
-    fs             = require('fs-ext'),
-    async          = require('async'),
-    url            = require('url'),
-    dns            = require('dns'),
-    Pcap           = require('./pcap.js'),
-    Db             = require('./db.js'),
-    molochparser   = require('./molochparser.js'),
-    passport       = require('passport'),
-    DigestStrategy = require('passport-http').DigestStrategy,
-    molochversion  = require('./version'),
-    http           = require('http'),
-    pug            = require('pug'),
-    https          = require('https'),
-    EventEmitter   = require('events').EventEmitter,
-    PNG            = require('pngjs').PNG,
-    decode         = require('./decode.js'),
-    onHeaders      = require('on-headers'),
-    glob           = require('glob'),
-    unzip          = require('unzip'),
-    helmet         = require('helmet'),
-    uuid           = require('uuidv4').default,
-    RE2            = require('re2');
+  var Config = require('./config.js');
+  var express = require('express');
+  var stylus = require('stylus');
+  var util = require('util');
+  var fs = require('fs');
+  var fse = require('fs-ext');
+  var async = require('async');
+  var url = require('url');
+  var dns = require('dns');
+  var Pcap = require('./pcap.js');
+  var Db = require('./db.js');
+  var molochparser = require('./molochparser.js');
+  var passport = require('passport');
+  var DigestStrategy = require('passport-http').DigestStrategy;
+  var molochversion = require('./version');
+  var http = require('http');
+  var pug = require('pug');
+  var https = require('https');
+  var EventEmitter = require('events').EventEmitter;
+  var PNG = require('pngjs').PNG;
+  var decode = require('./decode.js');
+  var onHeaders = require('on-headers');
+  var glob = require('glob');
+  var unzipper = require('unzipper');
+  var helmet = require('helmet');
+  var uuid = require('uuidv4').default;
+  var RE2 = require('re2');
+  var path = require('path');
 } catch (e) {
-  console.log ("ERROR - Couldn't load some dependancies, maybe need to 'npm update' inside viewer directory", e);
+  console.log("ERROR - Couldn't load some dependancies, maybe need to 'npm update' inside viewer directory", e);
   process.exit(1);
-  throw new Error("Exiting");
+  throw new Error('Exiting');
 }
 
-if (typeof express !== "function") {
+if (typeof express !== 'function') {
   console.log("ERROR - Need to run 'npm update' in viewer directory");
   process.exit(1);
-  throw new Error("Exiting");
+  throw new Error('Exiting');
 }
 var app = express();
 
-//////////////////////////////////////////////////////////////////////////////////
-//// Config
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// Config
+// ----------------------------------------------------------------------------
 var internals = {
-  CYBERCHEFVERSION: '9.11.7',
+  CYBERCHEFVERSION: '9.16.2',
   elasticBase: Config.getArray('elasticsearch', ',', 'http://localhost:9200'),
-  esQueryTimeout: Config.get("elasticsearchTimeout", 300) + 's',
-  userNameHeader: Config.get("userNameHeader"),
-  requiredAuthHeader: Config.get("requiredAuthHeader"),
-  requiredAuthHeaderVal: Config.get("requiredAuthHeaderVal"),
-  userAutoCreateTmpl: Config.get("userAutoCreateTmpl"),
-  esAdminUsers: Config.get('multiES', false)?[]:Config.getArray('esAdminUsers', ',', ''),
-  httpAgent:   new http.Agent({keepAlive: true, keepAliveMsecs:5000, maxSockets: 40}),
-  httpsAgent:  new https.Agent({keepAlive: true, keepAliveMsecs:5000, maxSockets: 40, rejectUnauthorized: !Config.insecure}),
+  esQueryTimeout: Config.get('elasticsearchTimeout', 300) + 's',
+  esScrollTimeout: Config.get('elasticsearchScrollTimeout', 900) + 's',
+  userNameHeader: Config.get('userNameHeader'),
+  requiredAuthHeader: Config.get('requiredAuthHeader'),
+  requiredAuthHeaderVal: Config.get('requiredAuthHeaderVal'),
+  userAutoCreateTmpl: Config.get('userAutoCreateTmpl'),
+  esAdminUsersSet: Config.get('esAdminUsers', false) !== false,
+  esAdminUsers: Config.get('multiES', false) ? [] : Config.getArray('esAdminUsers', ',', ''),
+  httpAgent: new http.Agent({ keepAlive: true, keepAliveMsecs: 5000, maxSockets: 40 }),
+  httpsAgent: new https.Agent({ keepAlive: true, keepAliveMsecs: 5000, maxSockets: 40, rejectUnauthorized: !Config.insecure }),
   previousNodesStats: [],
   caTrustCerts: {},
   cronRunning: false,
@@ -82,16 +86,16 @@ var internals = {
   pluginEmitter: new EventEmitter(),
   writers: {},
   oldDBFields: {},
-  isLocalViewRegExp: Config.get("isLocalViewRegExp")?new RE2(Config.get("isLocalViewRegExp")):undefined,
+  isLocalViewRegExp: Config.get('isLocalViewRegExp') ? new RE2(Config.get('isLocalViewRegExp')) : undefined,
   uploadLimits: {
   },
 
-  cronTimeout: +Config.get("dbFlushTimeout", 5) + // How long capture holds items
-               60 +                               // How long before ES reindexs
-               20,                                // Transmit and extra time
+  cronTimeout: +Config.get('dbFlushTimeout', 5) + // How long capture holds items
+               60 + // How long before ES reindexs
+               20, // Transmit and extra time
 
-//http://garethrees.org/2007/11/14/pngcrush/
-  emptyPNG: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==", 'base64'),
+  // http://garethrees.org/2007/11/14/pngcrush/
+  emptyPNG: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==', 'base64'),
   PNG_LINE_WIDTH: 256,
   runningHuntJob: undefined,
   proccessHuntJobsInitialized: false,
@@ -116,7 +120,13 @@ var internals = {
     settings: {},
     welcomeMsgNum: 1,
     found: true
-  }
+  },
+  scriptAggs: {}
+};
+
+internals.scriptAggs['ip.dst:port'] = {
+  script: 'if (doc.dstIp.value.indexOf(".") > 0) {return doc.dstIp.value + ":" + doc.dstPort.value} else {return doc.dstIp.value + "." + doc.dstPort.value}',
+  dbField: 'dstIp'
 };
 
 // make sure there's an _ after the prefix
@@ -124,19 +134,19 @@ if (internals.prefix && !internals.prefix.endsWith('_')) {
   internals.prefix = `${internals.prefix}_`;
 }
 
-if (Config.get("uploadFileSizeLimit")) {
-  internals.uploadLimits.fileSize = parseInt(Config.get("uploadFileSizeLimit"));
+if (Config.get('uploadFileSizeLimit')) {
+  internals.uploadLimits.fileSize = parseInt(Config.get('uploadFileSizeLimit'));
 }
 
 if (internals.elasticBase[0].lastIndexOf('http', 0) !== 0) {
-  internals.elasticBase[0] = "http://" + internals.elasticBase[0];
+  internals.elasticBase[0] = 'http://' + internals.elasticBase[0];
 }
 
-function isProduction() {
+function isProduction () {
   return app.get('env') === 'production';
 }
 
-function userCleanup(suser) {
+function userCleanup (suser) {
   suser.settings = suser.settings || {};
   if (suser.emailSearch === undefined) { suser.emailSearch = false; }
   if (suser.removeEnabled === undefined) { suser.removeEnabled = false; }
@@ -157,43 +167,43 @@ function userCleanup(suser) {
   }
 }
 
-passport.use(new DigestStrategy({qop: 'auth', realm: Config.get("httpRealm", "Moloch")},
-  function(userid, done) {
-    Db.getUserCache(userid, function(err, suser) {
-      if (err && !suser) {return done(err);}
-      if (!suser || !suser.found) {console.log("User", userid, "doesn't exist"); return done(null, false);}
-      if (!suser._source.enabled) {console.log("User", userid, "not enabled"); return done("Not enabled");}
+passport.use(new DigestStrategy({ qop: 'auth', realm: Config.get('httpRealm', 'Moloch') },
+  function (userid, done) {
+    Db.getUserCache(userid, function (err, suser) {
+      if (err && !suser) { return done(err); }
+      if (!suser || !suser.found) { console.log('User', userid, "doesn't exist"); return done(null, false); }
+      if (!suser._source.enabled) { console.log('User', userid, 'not enabled'); return done('Not enabled'); }
 
       userCleanup(suser._source);
 
-      return done(null, suser._source, {ha1: Config.store2ha1(suser._source.passStore)});
+      return done(null, suser._source, { ha1: Config.store2ha1(suser._source.passStore) });
     });
   },
   function (options, done) {
-      //TODO:  Should check nonce here
-      return done(null, true);
+    // TODO:  Should check nonce here
+    return done(null, true);
   }
 ));
 
 // app.configure
-var logger = require("morgan");
-var favicon = require("serve-favicon");
+var logger = require('morgan');
+var favicon = require('serve-favicon');
 var bodyParser = require('body-parser');
 var multer = require('multer');
 var methodOverride = require('method-override');
 var compression = require('compression');
 
-app.enable("jsonp callback");
-app.set('views', __dirname + '/views');
+app.enable('jsonp callback');
+app.set('views', path.join(__dirname, '/views'));
 app.set('view engine', 'pug');
-app.locals.molochversion =  molochversion.version;
+app.locals.molochversion = molochversion.version;
 app.locals.isIndex = false;
 app.locals.basePath = Config.basePath();
 app.locals.elasticBase = internals.elasticBase[0];
-app.locals.allowUploads = Config.get("uploadCommand") !== undefined;
-app.locals.molochClusters = Config.configMap("moloch-clusters");
+app.locals.allowUploads = Config.get('uploadCommand') !== undefined;
+app.locals.molochClusters = Config.configMap('moloch-clusters');
 
-app.use(favicon(__dirname + '/public/favicon.ico'));
+app.use(favicon(path.join(__dirname, '/public/favicon.ico')));
 app.use(passport.initialize());
 
 const iframeOption = Config.get('iframe', 'deny');
@@ -244,48 +254,46 @@ const unsafeInlineCspHeader = helmet.contentSecurityPolicy({
 });
 
 function molochError (status, text) {
-  /* jshint validthis: true */
   this.status(status || 403);
   return this.send(JSON.stringify({ success: false, text: text }));
 }
 
-app.use(function(req, res, next) {
+app.use(function (req, res, next) {
   res.molochError = molochError;
 
-  if (res.setTimeout) {
-    res.setTimeout(10 * 60 * 1000); // Increase default from 2 min to 10 min
-  }
-
-  req.url = req.url.replace(Config.basePath(), "/");
+  req.url = req.url.replace(Config.basePath(), '/');
   return next();
 });
 app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ limit: "5mb", extended: true }));
-//app.use(multer({dest: Config.get("pcapDir")}));
+app.use(bodyParser.urlencoded({ limit: '5mb', extended: true }));
+// app.use(multer({dest: Config.get("pcapDir")}));
 
 // send req to access log file or stdout
 var _stream = process.stdout;
-var _accesslogfile = Config.get("accessLogFile");
+var _accesslogfile = Config.get('accessLogFile');
 if (_accesslogfile) {
-  _stream = fs.createWriteStream(_accesslogfile, {flags: 'a'});
+  _stream = fs.createWriteStream(_accesslogfile, { flags: 'a' });
 }
 
+var _loggerFormat = decodeURIComponent(Config.get('accessLogFormat',
+  ':date :username %1b[1m:method%1b[0m %1b[33m:url%1b[0m :status :res[content-length] bytes :response-time ms'));
+var _suppressPaths = Config.getArray('accessLogSuppressPaths', ';', '');
 
-app.use(logger(':date :username \x1b[1m:method\x1b[0m \x1b[33m:url\x1b[0m :status :res[content-length] bytes :response-time ms',{stream: _stream}));
+app.use(logger(_loggerFormat, { stream: _stream,
+  skip: (req, res) => { return _suppressPaths.includes(req.path); } }));
 app.use(compression());
 app.use(methodOverride());
 
+app.use('/font-awesome', express.static(path.join(__dirname, '/../node_modules/font-awesome'), { maxAge: 600 * 1000 }));
+app.use('/bootstrap', express.static(path.join(__dirname, '/node_modules/bootstrap'), { maxAge: 600 * 1000 }));
 
-app.use('/font-awesome', express.static(__dirname + '/../node_modules/font-awesome', { maxAge: 600 * 1000}));
-app.use('/bootstrap', express.static(__dirname + '/node_modules/bootstrap', { maxAge: 600 * 1000}));
+app.use('/', express.static(path.join(__dirname, '/public'), { maxAge: 600 * 1000 }));
 
-app.use("/", express.static(__dirname + '/public', { maxAge: 600 * 1000}));
-
-if (Config.get("passwordSecret")) {
+if (Config.get('passwordSecret')) {
   app.locals.alwaysShowESStatus = false;
-  app.use(function(req, res, next) {
+  app.use(function (req, res, next) {
     // 200 for NS
-    if (req.url === "/_ns_/nstest.html") {
+    if (req.url === '/_ns_/nstest.html') {
       return res.end();
     }
 
@@ -297,14 +305,14 @@ if (Config.get("passwordSecret")) {
     // S2S Auth
     if (req.headers['x-moloch-auth']) {
       var obj = Config.auth2obj(req.headers['x-moloch-auth'], false);
-      obj.path = obj.path.replace(Config.basePath(), "/");
+      obj.path = obj.path.replace(Config.basePath(), '/');
       if (obj.path !== req.url) {
-        console.log("ERROR - mismatch url", obj.path, req.url);
-        return res.send("Unauthorized based on bad url, check logs on ", Config.hostName());
+        console.log('ERROR - mismatch url', obj.path, req.url);
+        return res.send('Unauthorized based on bad url, check logs on ', Config.hostName());
       }
       if (Math.abs(Date.now() - obj.date) > 120000) { // Request has to be +- 2 minutes
-        console.log("ERROR - Denying server to server based on timestamp, are clocks out of sync?", Date.now(), obj.date);
-        return res.send("Unauthorized based on timestamp - check that all moloch viewer machines have accurate clocks");
+        console.log('ERROR - Denying server to server based on timestamp, are clocks out of sync?', Date.now(), obj.date);
+        return res.send('Unauthorized based on timestamp - check that all moloch viewer machines have accurate clocks');
       }
 
       // Don't look up user for receiveSession
@@ -312,10 +320,10 @@ if (Config.get("passwordSecret")) {
         return next();
       }
 
-      Db.getUserCache(obj.user, function(err, suser) {
-        if (err) {return res.send("ERROR - x-moloch getUser - user: " + obj.user + " err:" + err);}
-        if (!suser || !suser.found) {return res.send(obj.user + " doesn't exist");}
-        if (!suser._source.enabled) {return res.send(obj.user + " not enabled");}
+      Db.getUserCache(obj.user, function (err, suser) {
+        if (err) { return res.send('ERROR - x-moloch getUser - user: ' + obj.user + ' err:' + err); }
+        if (!suser || !suser.found) { return res.send(obj.user + " doesn't exist"); }
+        if (!suser._source.enabled) { return res.send(obj.user + ' not enabled'); }
         userCleanup(suser._source);
         req.user = suser._source;
         return next();
@@ -346,16 +354,16 @@ if (Config.get("passwordSecret")) {
         if (internals.requiredAuthHeader !== undefined && internals.requiredAuthHeaderVal !== undefined) {
           let authHeader = req.headers[internals.requiredAuthHeader];
           if (authHeader === undefined) {
-             return res.send('Missing authorization header');
+            return res.send('Missing authorization header');
           }
           let authorized = false;
           authHeader.split(',').forEach(headerVal => {
-             if (headerVal.trim() === internals.requiredAuthHeaderVal) {
-                authorized = true;
-             }
+            if (headerVal.trim() === internals.requiredAuthHeaderVal) {
+              authorized = true;
+            }
           });
           if (!authorized) {
-              return res.send('Not authorized');
+            return res.send('Not authorized');
           }
         }
 
@@ -363,22 +371,21 @@ if (Config.get("passwordSecret")) {
 
         Db.getUserCache(userName, (err, suser) => {
           if (internals.userAutoCreateTmpl === undefined) {
-             return ucb(err, suser, userName);
+            return ucb(err, suser, userName);
           } else if ((err && err.toString().includes('Not Found')) ||
              (!suser || !suser.found)) { // Try dynamic creation
-             /* jslint evil: true */
-             let nuser = JSON.parse(new Function('return `' +
+            let nuser = JSON.parse(new Function('return `' +
                    internals.userAutoCreateTmpl + '`;').call(req.headers));
-             Db.setUser(userName, nuser, (err, info) => {
-               if (err) {
-                 console.log('Elastic search error adding user: (' +  userName + '):(' + JSON.stringify(nuser) + '):' + err);
-               } else {
-                 console.log('Added user:' + userName + ':' + JSON.stringify(nuser));
-               }
-               return Db.getUserCache(userName, ucb);
-             });
+            Db.setUser(userName, nuser, (err, info) => {
+              if (err) {
+                console.log('Elastic search error adding user: (' + userName + '):(' + JSON.stringify(nuser) + '):' + err);
+              } else {
+                console.log('Added user:' + userName + ':' + JSON.stringify(nuser));
+              }
+              return Db.getUserCache(userName, ucb);
+            });
           } else {
-             return ucb(err, suser, userName);
+            return ucb(err, suser, userName);
           }
         });
         return;
@@ -387,23 +394,21 @@ if (Config.get("passwordSecret")) {
       }
     }
 
-
     // Browser auth
-    req.url = req.url.replace("/", Config.basePath());
-    passport.authenticate('digest', {session: false})(req, res, function (err) {
-      req.url = req.url.replace(Config.basePath(), "/");
-      if (err) { return res.molochError(200, err); }
-      else { return next(); }
+    req.url = req.url.replace('/', Config.basePath());
+    passport.authenticate('digest', { session: false })(req, res, function (err) {
+      req.url = req.url.replace(Config.basePath(), '/');
+      if (err) { return res.molochError(200, err); } else { return next(); }
     });
   });
-} else if (Config.get("regressionTests", false)) {
+} else if (Config.get('regressionTests', false)) {
   console.log('WARNING - The setting "regressionTests" is set to true, do NOT use in production, for testing only');
   app.locals.alwaysShowESStatus = true;
-  app.locals.noPasswordSecret   = true;
-  app.use(function(req, res, next) {
-    var username = req.query.molochRegressionUser || "anonymous";
-    req.user = {userId: username, enabled: true, createEnabled: username === "anonymous", webEnabled: true, headerAuthEnabled: false, emailSearch: true, removeEnabled: true, packetSearch: true, settings: {}, welcomeMsgNum: 1};
-    Db.getUserCache(username, function(err, suser) {
+  app.locals.noPasswordSecret = true;
+  app.use(function (req, res, next) {
+    var username = req.query.molochRegressionUser || 'anonymous';
+    req.user = { userId: username, enabled: true, createEnabled: username === 'anonymous', webEnabled: true, headerAuthEnabled: false, emailSearch: true, removeEnabled: true, packetSearch: true, settings: {}, welcomeMsgNum: 1 };
+    Db.getUserCache(username, function (err, suser) {
       if (!err && suser && suser.found) {
         userCleanup(suser._source);
         req.user = suser._source;
@@ -415,8 +420,8 @@ if (Config.get("passwordSecret")) {
   /* Shared password isn't set, who cares about auth, db is only used for settings */
   console.log('WARNING - The setting "passwordSecret" is not set, all access is anonymous');
   app.locals.alwaysShowESStatus = true;
-  app.locals.noPasswordSecret   = true;
-  app.use(function(req, res, next) {
+  app.locals.noPasswordSecret = true;
+  app.use(function (req, res, next) {
     req.user = internals.anonymousUser;
     Db.getUserCache('anonymous', (err, suser) => {
       if (!err && suser && suser.found) {
@@ -461,20 +466,21 @@ app.use(function (req, res, next) {
   });
 });
 
-app.use(function(req, res, next) {
+app.use(function (req, res, next) {
   if (!req.user || !req.user.userId) {
     return next();
   }
 
   var mrc = {};
 
-  mrc.httpAuthorizationDecode = {fields: "http.authorization", func: `{
+  mrc.httpAuthorizationDecode = { fields: 'http.authorization', func: `{
     if (value.substring(0,5) === "Basic")
       return {name: "Decoded:", value: atob(value.substring(6))};
     return undefined;
-  }`};
-  mrc.bodyHashMd5 = {category: "md5", url: "/%NODE%/%ID%/bodyHash/%TEXT%", name: "Download File"};
-  mrc.bodyHashSha256 = {category: "sha256", url: "/%NODE%/%ID%/bodyHash/%TEXT%", name: "Download File"};
+  }` };
+  mrc.reverseDNS = { category: 'ip', name: 'Get Reverse DNS', url: 'reverseDNS.txt?ip=%TEXT%', actionType: 'fetch' };
+  mrc.bodyHashMd5 = { category: 'md5', url: '%NODE%/%ID%/bodyHash/%TEXT%', name: 'Download File' };
+  mrc.bodyHashSha256 = { category: 'sha256', url: '%NODE%/%ID%/bodyHash/%TEXT%', name: 'Download File' };
 
   for (var key in internals.rightClicks) {
     var rc = internals.rightClicks[key];
@@ -486,18 +492,17 @@ app.use(function(req, res, next) {
   next();
 });
 
-logger.token('username', function(req, res){ return req.user?req.user.userId:"-"; });
+logger.token('username', function (req, res) { return req.user ? req.user.userId : '-'; });
 
 // Explicit sigint handler for running under docker
 // See https://github.com/nodejs/node/issues/4182
-process.on('SIGINT', function() {
-    process.exit();
+process.on('SIGINT', function () {
+  process.exit();
 });
 
-function loadFields() {
+function loadFields () {
   Db.loadFields(function (err, data) {
-    if (err) {data = [];}
-    else {data = data.hits.hits;}
+    if (err) { data = []; } else { data = data.hits.hits; }
 
     // Everything will use dbField2 as dbField
     for (let i = 0, ilen = data.length; i < ilen; i++) {
@@ -512,91 +517,90 @@ function loadFields() {
     }
     Config.loadFields(data);
     app.locals.fieldsMap = JSON.stringify(Config.getFieldsMap());
-    app.locals.fieldsArr = Config.getFields().sort(function(a,b) {return (a.exp > b.exp?1:-1);});
+    app.locals.fieldsArr = Config.getFields().sort(function (a, b) { return (a.exp > b.exp ? 1 : -1); });
     createSessionDetail();
   });
 }
 
-function loadPlugins() {
+function loadPlugins () {
   var api = {
-    registerWriter: function(str, info) {
+    registerWriter: function (str, info) {
       internals.writers[str] = info;
     },
-    getDb: function() { return Db; },
-    getPcap: function() { return Pcap; },
+    getDb: function () { return Db; },
+    getPcap: function () { return Pcap; }
   };
   var plugins = Config.getArray('viewerPlugins', ';', '');
   var dirs = Config.getArray('pluginsDir', ';', '/data/moloch/plugins');
   plugins.forEach(function (plugin) {
     plugin = plugin.trim();
-    if (plugin === "") {
+    if (plugin === '') {
       return;
     }
     var found = false;
     dirs.forEach(function (dir) {
       dir = dir.trim();
-      if (found || dir === "") {
+      if (found || dir === '') {
         return;
       }
-      if (fs.existsSync(dir + "/" + plugin)) {
+      if (fs.existsSync(dir + '/' + plugin)) {
         found = true;
-        var p = require(dir + "/" + plugin);
+        var p = require(dir + '/' + plugin);
         p.init(Config, internals.pluginEmitter, api);
       }
     });
     if (!found) {
-      console.log("WARNING - Couldn't find plugin", plugin, "in", dirs);
+      console.log("WARNING - Couldn't find plugin", plugin, 'in', dirs);
     }
   });
 }
 
-//////////////////////////////////////////////////////////////////////////////////
-//// Utility
-//////////////////////////////////////////////////////////////////////////////////
-function safeStr(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/\'/g, '&#39;').replace(/\//g, '&#47;');
+// ----------------------------------------------------------------------------
+// Utility
+// ----------------------------------------------------------------------------
+function safeStr (str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/\//g, '&#47;');
 }
 
 // https://medium.com/dailyjs/rewriting-javascript-converting-an-array-of-objects-to-an-object-ec579cafbfc7
-function arrayToObject(array, key)
-{
+function arrayToObject (array, key) {
   return array.reduce((obj, item) => {
     obj[item[key]] = item;
-      return obj;
+    return obj;
   }, {});
 }
 
-function queryValueToArray(val) {
+function queryValueToArray (val) {
   if (val === undefined || val === null) {
     return [];
   }
   if (!Array.isArray(val)) {
     val = [val];
   }
-  return val.join(",").split(",");
+  return val.join(',').split(',');
 }
 
-function errorString(err, result) {
+function errorString (err, result) {
   var str;
-  if (err && typeof err === "string") {
+  if (err && typeof err === 'string') {
     str = err;
-  } else if (err && typeof err.message === "string") {
+  } else if (err && typeof err.message === 'string') {
     str = err.message;
   } else if (result && result.error) {
     str = result.error;
   } else {
-    str = "Unknown issue, check logs";
+    str = 'Unknown issue, check logs';
     console.log(err, result);
   }
 
-  if (str.match("IndexMissingException")) {
+  if (str.match('IndexMissingException')) {
     return "Moloch's Elasticsearch database has no matching session indices for timeframe selected";
   } else {
-    return "Elasticsearch error: " + str;
+    return 'Elasticsearch error: ' + str;
   }
 }
 
-function parseCustomView(key, input) {
+function parseCustomView (key, input) {
   var fieldsMap = Config.getFieldsMap();
 
   var match = input.match(/require:([^;]+)/);
@@ -618,7 +622,7 @@ function parseCustomView(key, input) {
 
   var output = `  if (session.${require})\n    div.sessionDetailMeta.bold ${title}\n    dl.sessionDetailMeta\n`;
 
-  for (let field of fields.split(",")) {
+  for (let field of fields.split(',')) {
     let info = fieldsMap[field];
     if (!info) {
       continue;
@@ -634,83 +638,82 @@ function parseCustomView(key, input) {
   return output;
 }
 
-function createSessionDetail() {
+function createSessionDetail () {
   var found = {};
   var dirs = [];
 
   dirs = dirs.concat(Config.getArray('pluginsDir', ';', '/data/moloch/plugins'));
   dirs = dirs.concat(Config.getArray('parsersDir', ';', '/data/moloch/parsers'));
 
-  dirs.forEach(function(dir) {
+  dirs.forEach(function (dir) {
     try {
       var files = fs.readdirSync(dir);
       // sort().reverse() so in this dir pug is processed before jade
-      files.sort().reverse().forEach(function(file) {
-        var sfile = file.replace(/\.(pug|jade)/, "");
+      files.sort().reverse().forEach(function (file) {
+        var sfile = file.replace(/\.(pug|jade)/, '');
         if (found[sfile]) {
           return;
         }
         if (file.match(/\.detail\.jade$/i)) {
-          found[sfile] = fs.readFileSync(dir + "/" + file, 'utf8').replace(/^/mg, "  ") + "\n";
+          found[sfile] = fs.readFileSync(dir + '/' + file, 'utf8').replace(/^/mg, '  ') + '\n';
         } else if (file.match(/\.detail\.pug$/i)) {
-          found[sfile] = "  include " + dir + "/" + file + "\n";
+          found[sfile] = '  include ' + dir + '/' + file + '\n';
         }
       });
     } catch (e) {}
   });
 
-  var customViews = Config.keys("custom-views") || [];
+  var customViews = Config.keys('custom-views') || [];
 
   for (let key of customViews) {
-    let view = Config.sectionGet("custom-views", key);
+    let view = Config.sectionGet('custom-views', key);
     found[key] = parseCustomView(key, view);
   }
 
-  var makers = internals.pluginEmitter.listeners("makeSessionDetail");
-  async.each(makers, function(cb, nextCb) {
+  var makers = internals.pluginEmitter.listeners('makeSessionDetail');
+  async.each(makers, function (cb, nextCb) {
     cb(function (err, items) {
       for (var k in items) {
-        found[k] = items[k].replace(/^/mg, "  ") + "\n";
+        found[k] = items[k].replace(/^/mg, '  ') + '\n';
       }
       return nextCb();
     });
   }, function () {
-    internals.sessionDetailNew = "include views/mixins.pug\n" +
-                                 "div.session-detail(sessionid=session.id,hidePackets=hidePackets)\n" +
-                                 "  include views/sessionDetail\n";
-    Object.keys(found).sort().forEach(function(k) {
+    internals.sessionDetailNew = 'include views/mixins.pug\n' +
+                                 'div.session-detail(sessionid=session.id,hidePackets=hidePackets)\n' +
+                                 '  include views/sessionDetail\n';
+    Object.keys(found).sort().forEach(function (k) {
       internals.sessionDetailNew += found[k];
     });
 
-    internals.sessionDetailNew = internals.sessionDetailNew.replace(/div.sessionDetailMeta.bold/g, "h4.sessionDetailMeta")
-                                                           .replace(/dl.sessionDetailMeta/g, "dl")
-                                                           .replace(/a.moloch-right-click.*molochexpr='([^']+)'.*#{(.*)}/g, "+clickableValue('$1', $2)")
-                                                           ;
+    internals.sessionDetailNew = internals.sessionDetailNew.replace(/div.sessionDetailMeta.bold/g, 'h4.sessionDetailMeta')
+      .replace(/dl.sessionDetailMeta/g, 'dl')
+      .replace(/a.moloch-right-click.*molochexpr='([^']+)'.*#{(.*)}/g, "+clickableValue('$1', $2)")
+    ;
   });
 }
 
-function createRightClicks() {
-
-  var mrc = Config.configMap("right-click");
+function createRightClicks () {
+  var mrc = Config.configMap('right-click');
   for (var key in mrc) {
     if (mrc[key].fields) {
-      mrc[key].fields = mrc[key].fields.split(",");
+      mrc[key].fields = mrc[key].fields.split(',');
     }
     if (mrc[key].users) {
       var users = {};
-      for (const item of mrc[key].users.split(",")) {
+      for (const item of mrc[key].users.split(',')) {
         users[item] = 1;
       }
       mrc[key].users = users;
     }
   }
-  var makers = internals.pluginEmitter.listeners("makeRightClick");
-  async.each(makers, function(cb, nextCb) {
+  var makers = internals.pluginEmitter.listeners('makeRightClick');
+  async.each(makers, function (cb, nextCb) {
     cb(function (err, items) {
       for (var k in items) {
         mrc[k] = items[k];
         if (mrc[k].fields && !Array.isArray(mrc[k].fields)) {
-          mrc[k].fields = mrc[k].fields.split(",");
+          mrc[k].fields = mrc[k].fields.split(',');
         }
       }
       return nextCb();
@@ -720,18 +723,18 @@ function createRightClicks() {
   });
 }
 
-//https://coderwall.com/p/pq0usg/javascript-string-split-that-ll-return-the-remainder
-function splitRemain(str, separator, limit) {
-    str = str.split(separator);
-    if(str.length <= limit) {return str;}
+// https://coderwall.com/p/pq0usg/javascript-string-split-that-ll-return-the-remainder
+function splitRemain (str, separator, limit) {
+  str = str.split(separator);
+  if (str.length <= limit) { return str; }
 
-    var ret = str.splice(0, limit);
-    ret.push(str.join(separator));
+  var ret = str.splice(0, limit);
+  ret.push(str.join(separator));
 
-    return ret;
+  return ret;
 }
 
-function arrayZeroFill(n) {
+function arrayZeroFill (n) {
   var a = [];
   while (n > 0) {
     a.push(0);
@@ -768,54 +771,22 @@ class Mutex {
   }
 }
 
-//////////////////////////////////////////////////////////////////////////////////
-//// Requests
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// Requests
+// ----------------------------------------------------------------------------
 
-function addAuth(info, user, node, secret) {
-    if (!info.headers) {
-        info.headers = {};
-    }
-    info.headers['x-moloch-auth'] = Config.obj2auth({date: Date.now(),
-                                                     user: user.userId,
-                                                     node: node,
-                                                     path: info.path
-                                                    }, false, secret);
-}
-
-function loadCaTrust(node) {
-  var caTrustFile = Config.getFull(node, "caTrustFile");
-
-  if (caTrustFile && caTrustFile.length > 0) {
-    let certs = [];
-
-    var caTrustFileLines = fs.readFileSync(caTrustFile, 'utf8');
-    caTrustFileLines = caTrustFileLines.split("\n");
-
-    var foundCert = [];
-
-    for (let i = 0, ilen = caTrustFileLines.length; i < ilen; i++) {
-      let line = caTrustFileLines[i];
-      if (line.length === 0) {
-        continue;
-      }
-      foundCert.push(line);
-      if (line.match(/-END CERTIFICATE-/)) {
-        certs.push(foundCert.join("\n"));
-        foundCert = [];
-      }
-    }
-
-    if (certs.length > 0) {
-      return certs;
-    }
+function addAuth (info, user, node, secret) {
+  if (!info.headers) {
+    info.headers = {};
   }
-
-  return undefined;
+  info.headers['x-moloch-auth'] = Config.obj2auth({ date: Date.now(),
+    user: user.userId,
+    node: node,
+    path: info.path
+  }, false, secret);
 }
 
-
-function addCaTrust(info, node) {
+function addCaTrust (info, node) {
   if (!Config.isHTTPS(node)) {
     return;
   }
@@ -826,38 +797,37 @@ function addCaTrust(info, node) {
     return;
   }
 
-  internals.caTrustCerts[node] = loadCaTrust(node);
+  internals.caTrustCerts[node] = Config.getCaTrustCerts(node);
 
   if (internals.caTrustCerts[node] !== undefined && internals.caTrustCerts[node].length > 0) {
     info.ca = internals.caTrustCerts[node];
     info.agent.options.ca = internals.caTrustCerts[node];
-    return;
   }
 }
 
-function noCache(req, res, ct) {
+function noCache (req, res, ct) {
   res.header('Cache-Control', 'no-cache, private, no-store, must-revalidate, max-stale=0, post-check=0, pre-check=0');
   if (ct) {
-    res.setHeader("Content-Type", ct);
+    res.setHeader('Content-Type', ct);
     res.header('X-Content-Type-Options', 'nosniff');
   }
 }
 
-function getViewUrl(node, cb) {
+function getViewUrl (node, cb) {
   if (Array.isArray(node)) {
     node = node[0];
   }
 
-  var url = Config.getFull(node, "viewUrl");
+  var url = Config.getFull(node, 'viewUrl');
   if (url) {
     if (Config.debug > 1) {
       console.log(`DEBUG: node:${node} is using ${url} because viewUrl was set for ${node} in config file`);
     }
-    cb(null, url, url.slice(0, 5) === "https"?https:http);
+    cb(null, url, url.slice(0, 5) === 'https' ? https : http);
     return;
   }
 
-  Db.molochNodeStatsCache(node, function(err, stat) {
+  Db.molochNodeStatsCache(node, function (err, stat) {
     if (err) {
       return cb(err);
     }
@@ -867,9 +837,9 @@ function getViewUrl(node, cb) {
     }
 
     if (Config.isHTTPS(node)) {
-      cb(null, "https://" + stat.hostname + ":" + Config.getFull(node, "viewPort", "8005"), https);
+      cb(null, 'https://' + stat.hostname + ':' + Config.getFull(node, 'viewPort', '8005'), https);
     } else {
-      cb(null, "http://" + stat.hostname + ":" + Config.getFull(node, "viewPort", "8005"), http);
+      cb(null, 'http://' + stat.hostname + ':' + Config.getFull(node, 'viewPort', '8005'), http);
     }
   });
 }
@@ -877,21 +847,22 @@ function getViewUrl(node, cb) {
 function proxyRequest (req, res, errCb) {
   noCache(req, res);
 
-  getViewUrl(req.params.nodeName, function(err, viewUrl, client) {
+  getViewUrl(req.params.nodeName, function (err, viewUrl, client) {
     if (err) {
       if (errCb) {
         return errCb(err);
       }
-      console.log("ERROR - getViewUrl - node:", req.params.nodeName, "err:", err);
+      console.log('ERROR - getViewUrl - node:', req.params.nodeName, 'err:', err);
       return res.send(`Can't find view url for '${safeStr(req.params.nodeName)}' check viewer logs on '${Config.hostName()}'`);
     }
     var info = url.parse(viewUrl);
     info.path = req.url;
-    info.agent = (client === http?internals.httpAgent:internals.httpsAgent);
+    info.agent = (client === http ? internals.httpAgent : internals.httpsAgent);
+    info.timeout = 20 * 60 * 1000;
     addAuth(info, req.user, req.params.nodeName);
     addCaTrust(info, req.params.nodeName);
 
-    var preq = client.request(info, function(pres) {
+    var preq = client.request(info, function (pres) {
       if (pres.headers['content-type']) {
         res.setHeader('content-type', pres.headers['content-type']);
       }
@@ -910,7 +881,7 @@ function proxyRequest (req, res, errCb) {
       if (errCb) {
         return errCb(e);
       }
-      console.log("ERROR - Couldn't proxy request=", info, "\nerror=", e, "You might want to run viewer with two --debug for more info");
+      console.log("ERROR - Couldn't proxy request=", info, '\nerror=', e, 'You might want to run viewer with two --debug for more info');
       res.send(`Error talking to node '${safeStr(req.params.nodeName)}' using host '${info.host}' check viewer logs on '${Config.hostName()}'`);
     });
     preq.end();
@@ -922,9 +893,11 @@ function makeRequest (node, path, user, cb) {
     let info = url.parse(viewUrl);
     info.path = encodeURI(`${Config.basePath(node)}${path}`);
     info.agent = (client === http ? internals.httpAgent : internals.httpsAgent);
+    info.timeout = 20 * 60 * 1000;
     addAuth(info, user, node);
     addCaTrust(info, node);
-    let preq = client.request(info, function (pres) {
+
+    function responseFunc (pres) {
       let response = '';
       pres.on('data', function (chunk) {
         response += chunk;
@@ -932,10 +905,17 @@ function makeRequest (node, path, user, cb) {
       pres.on('end', function () {
         cb(null, response);
       });
-    });
-    preq.on('error', function (err) {
-      console.log(`Error with ${info.path} on remote viewer: ${err}`);
-      cb(err);
+    }
+    let preq = client.request(info, responseFunc);
+    preq.on('error', (err) => {
+      // Try a second time on errors
+      console.log(`Retry ${info.path} on remote viewer: ${err}`);
+      let preq2 = client.request(info, responseFunc);
+      preq2.on('error', (err) => {
+        console.log(`Error with ${info.path} on remote viewer: ${err}`);
+        cb(err);
+      });
+      preq2.end();
     });
     preq.end();
   });
@@ -949,7 +929,7 @@ function isLocalView (node, yesCb, noCb) {
     return yesCb();
   }
 
-  var pcapWriteMethod = Config.getFull(node, "pcapWriteMethod");
+  var pcapWriteMethod = Config.getFull(node, 'pcapWriteMethod');
   var writer = internals.writers[pcapWriteMethod];
   if (writer && writer.localNode === false) {
     if (Config.debug > 1) {
@@ -960,10 +940,10 @@ function isLocalView (node, yesCb, noCb) {
   return Db.isLocalView(node, yesCb, noCb);
 }
 
-//////////////////////////////////////////////////////////////////////////////////
-//// Middleware
-//////////////////////////////////////////////////////////////////////////////////
-function checkProxyRequest(req, res, next) {
+// ----------------------------------------------------------------------------
+// Middleware
+// ----------------------------------------------------------------------------
+function checkProxyRequest (req, res, next) {
   isLocalView(req.params.nodeName, function () {
     return next();
   },
@@ -982,19 +962,19 @@ function setCookie (req, res, next) {
   if (Config.isHTTPS()) { cookieOptions.secure = true; }
 
   res.cookie( // send cookie for basic, non admin functions
-     'MOLOCH-COOKIE',
-     Config.obj2auth({
-       date: Date.now(),
-       pid: process.pid,
-       userId: req.user.userId
-     }, true),
-     cookieOptions
+    'MOLOCH-COOKIE',
+    Config.obj2auth({
+      date: Date.now(),
+      pid: process.pid,
+      userId: req.user.userId
+    }, true),
+    cookieOptions
   );
 
   return next();
 }
 
-function checkCookieToken(req, res, next) {
+function checkCookieToken (req, res, next) {
   if (!req.headers['x-moloch-cookie']) {
     return res.molochError(500, 'Missing token');
   }
@@ -1003,7 +983,6 @@ function checkCookieToken(req, res, next) {
   var diff = Math.abs(Date.now() - req.token.date);
   if (diff > 2400000 || /* req.token.pid !== process.pid || */
       req.token.userId !== req.user.userId) {
-
     console.trace('bad token', req.token);
     return res.molochError(500, 'Timeout - Please try reloading page and repeating the action');
   }
@@ -1050,7 +1029,7 @@ function checkHuntAccess (req, res, next) {
         console.log('error', err);
         return res.molochError(500, err);
       }
-      if (!huntHit || !huntHit.found) { throw 'Hunt not found'; }
+      if (!huntHit || !huntHit.found) { throw new Error('Hunt not found'); }
 
       if (huntHit._source.userId === req.user.userId) {
         return next();
@@ -1077,20 +1056,20 @@ function checkCronAccess (req, res, next) {
   }
 }
 
-function noCacheJson(req, res, next) {
+function noCacheJson (req, res, next) {
   res.header('Cache-Control', 'no-cache, private, no-store, must-revalidate, max-stale=0, post-check=0, pre-check=0');
-  res.setHeader("Content-Type", 'application/json');
+  res.setHeader('Content-Type', 'application/json');
   return next();
 }
 
-function logAction(uiPage) {
-  return function(req, res, next) {
+function logAction (uiPage) {
+  return function (req, res, next) {
     var log = {
-      timestamp : Math.floor(Date.now()/1000),
-      method    : req.method,
-      userId    : req.user.userId,
-      api       : req._parsedUrl.pathname,
-      query     : req._parsedUrl.query,
+      timestamp: Math.floor(Date.now() / 1000),
+      method: req.method,
+      userId: req.user.userId,
+      api: req._parsedUrl.pathname,
+      query: req._parsedUrl.query,
       expression: req.query.expression
     };
 
@@ -1102,7 +1081,7 @@ function logAction(uiPage) {
 
     if (req.query.date && parseInt(req.query.date) === -1) {
       log.range = log.timestamp;
-    } else if(req.query.startTime && req.query.stopTime) {
+    } else if (req.query.startTime && req.query.stopTime) {
       log.range = req.query.stopTime - req.query.startTime;
     }
 
@@ -1117,8 +1096,8 @@ function logAction(uiPage) {
     }
 
     // save the request body
-    var avoidProps  = { password:true, newPassword:true, currentPassword:true };
-    var bodyClone   = {};
+    var avoidProps = { password: true, newPassword: true, currentPassword: true };
+    var bodyClone = {};
 
     for (var key in req.body) {
       if (req.body.hasOwnProperty(key) && !avoidProps[key]) {
@@ -1130,17 +1109,17 @@ function logAction(uiPage) {
       log.body = bodyClone;
     }
 
-    res.logCounts = function(recordsReturned, recordsFiltered, recordsTotal) {
+    res.logCounts = function (recordsReturned, recordsFiltered, recordsTotal) {
       log.recordsReturned = recordsReturned;
       log.recordsFiltered = recordsFiltered;
-      log.recordsTotal    = recordsTotal;
+      log.recordsTotal = recordsTotal;
     };
 
     req._molochStartTime = new Date();
     function finish () {
       log.queryTime = new Date() - req._molochStartTime;
       res.removeListener('finish', finish);
-      Db.historyIt(log, function(err, info) {
+      Db.historyIt(log, function (err, info) {
         if (err) { console.log('log history error', err, info); }
       });
     }
@@ -1154,8 +1133,7 @@ function logAction(uiPage) {
 function fieldToExp (req, res, next) {
   if (req.query.exp && !req.query.field) {
     var field = Config.getFieldsMap()[req.query.exp];
-    if (field) { req.query.field = field.dbField; }
-    else { req.query.field = req.query.exp; }
+    if (field) { req.query.field = field.dbField; } else { req.query.field = req.query.exp; }
   }
 
   return next();
@@ -1174,32 +1152,31 @@ function recordResponseTime (req, res, next) {
   next();
 }
 
-
-//////////////////////////////////////////////////////////////////////////////////
-//// Pages
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// Pages
+// ----------------------------------------------------------------------------
 // APIs disabled in demoMode, needs to be before real callbacks
 if (Config.get('demoMode', false)) {
-  console.log("WARNING - Starting in demo mode, some APIs disabled");
-  app.all(['/settings', '/users', '/history/list'], function(req, res) {
+  console.log('WARNING - Starting in demo mode, some APIs disabled');
+  app.all(['/settings', '/users', '/history/list'], function (req, res) {
     return res.send('Disabled in demo mode.');
   });
 
-  app.get(['/user/cron', '/history/list'], function(req, res) {
-    return res.molochError(403, "Disabled in demo mode.");
+  app.get(['/user/cron', '/history/list'], function (req, res) {
+    return res.molochError(403, 'Disabled in demo mode.');
   });
 
-  app.post(['/user/password/change', '/changePassword', '/tableState/:tablename'], function(req, res) {
-    return res.molochError(403, "Disabled in demo mode.");
+  app.post(['/user/password/change', '/changePassword', '/tableState/:tablename'], function (req, res) {
+    return res.molochError(403, 'Disabled in demo mode.');
   });
 }
 
-app.get(['/', '/app'], function(req, res) {
-  var question = req.url.indexOf("?");
+app.get(['/', '/app'], function (req, res) {
+  var question = req.url.indexOf('?');
   if (question === -1) {
-    res.redirect("sessions");
+    res.redirect('sessions');
   } else {
-    res.redirect("sessions" + req.url.substring(question));
+    res.redirect('sessions' + req.url.substring(question));
   }
 });
 
@@ -1207,8 +1184,8 @@ app.get('/about', checkPermissions(['webEnabled']), (req, res) => {
   res.redirect('help');
 });
 
-app.get('/molochclusters', function(req, res) {
-  function cloneClusters(clusters) {
+app.get('/molochclusters', function (req, res) {
+  function cloneClusters (clusters) {
     var clone = {};
 
     for (var key in app.locals.molochClusters) {
@@ -1216,7 +1193,7 @@ app.get('/molochclusters', function(req, res) {
         var cluster = app.locals.molochClusters[key];
         clone[key] = {
           name: cluster.name,
-          url : cluster.url
+          url: cluster.url
         };
       }
     }
@@ -1224,8 +1201,8 @@ app.get('/molochclusters', function(req, res) {
     return clone;
   }
 
-  if(!app.locals.molochClusters) {
-    var molochClusters = Config.configMap("moloch-clusters");
+  if (!app.locals.molochClusters) {
+    var molochClusters = Config.configMap('moloch-clusters');
 
     if (!molochClusters) {
       res.status(404);
@@ -1242,8 +1219,8 @@ app.get('/molochclusters', function(req, res) {
 
 // custom user css
 app.get('/user.css', checkPermissions(['webEnabled']), (req, res) => {
-  fs.readFile("./views/user.styl", 'utf8', function(err, str) {
-    function error(msg) {
+  fs.readFile('./views/user.styl', 'utf8', function (err, str) {
+    function error (msg) {
       console.log('ERROR - user.css -', msg);
       return res.status(404).end();
     }
@@ -1293,27 +1270,28 @@ app.get('/user.css', checkPermissions(['webEnabled']), (req, res) => {
     style.define('colorSrc', new stylus.nodes.Literal(colors[13]));
     style.define('colorDst', new stylus.nodes.Literal(colors[14]));
 
-    style.render(function(err, css){
+    style.render(function (err, css) {
       if (err) { return error(err); }
       return res.send(css);
     });
   });
 });
 
-
 /* User Endpoints ---------------------------------------------------------- */
 // default settings for users with no settings
 let settingDefaults = {
-  timezone      : 'local',
-  detailFormat  : 'last',
+  timezone: 'local',
+  detailFormat: 'last',
   showTimestamps: 'last',
-  sortColumn    : 'firstPacket',
-  sortDirection : 'desc',
-  spiGraph      : 'node',
-  connSrcField  : 'srcIp',
-  connDstField  : 'ip.dst:port',
-  numPackets    : 'last',
-  theme         : 'default-theme'
+  sortColumn: 'firstPacket',
+  sortDirection: 'desc',
+  spiGraph: 'node',
+  connSrcField: 'srcIp',
+  connDstField: 'ip.dst:port',
+  numPackets: 'last',
+  theme: 'default-theme',
+  manualQuery: false,
+  timelineDataFilters: ['totPackets', 'totBytes', 'totDataBytes'] // dbField2 values from fields
 };
 
 // gets the current user
@@ -1333,8 +1311,13 @@ app.get('/user/current', checkPermissions(['webEnabled']), (req, res) => {
   }
 
   clone.canUpload = app.locals.allowUploads;
-  clone.esAdminUser = internals.esAdminUsers.includes(req.user.userId);
 
+  // If esAdminUser is set use that, other wise use createEnable privilege
+  if (internals.esAdminUsersSet) {
+    clone.esAdminUser = internals.esAdminUsers.includes(req.user.userId);
+  } else {
+    clone.esAdminUser = req.user.createEnabled && Config.get('multiES', false) === false;
+  }
 
   // If no settings, use defaults
   if (clone.settings === undefined) { clone.settings = settingDefaults; }
@@ -1359,9 +1342,9 @@ function getSettingUserCache (req, res, next) {
   }
 
   // user is trying to get another user's settings without admin privilege
-  if (!req.user.createEnabled) { return res.molochError(403, "Need admin privileges"); }
+  if (!req.user.createEnabled) { return res.molochError(403, 'Need admin privileges'); }
 
-  Db.getUserCache(req.query.userId, function(err, user) {
+  Db.getUserCache(req.query.userId, function (err, user) {
     if (err || !user || !user.found) {
       if (app.locals.noPasswordSecret) {
         // TODO: send anonymous user's settings
@@ -1390,12 +1373,12 @@ function getSettingUserDb (req, res, next) {
     userId = req.user.userId;
   } else if (!req.user.createEnabled) {
     // user is trying to get another user's settings without admin privilege
-    return res.molochError(403, "Need admin privileges");
+    return res.molochError(403, 'Need admin privileges');
   } else {
     userId = req.query.userId;
   }
 
-  Db.getUser(userId, function(err, user) {
+  Db.getUser(userId, function (err, user) {
     if (err || !user || !user.found) {
       if (app.locals.noPasswordSecret) {
         // TODO: send anonymous user's settings
@@ -1428,13 +1411,15 @@ function buildNotifiers () {
 }
 
 function issueAlert (notifierName, alertMessage, continueProcess) {
+  if (!notifierName) { return continueProcess('No name supplied for notifier'); }
+
   if (!internals.notifiers) { buildNotifiers(); }
 
   // find notifier
   Db.getUser('_moloch_shared', (err, sharedUser) => {
     if (!sharedUser || !sharedUser.found) {
       console.log('Cannot find notifier, no alert can be issued');
-      return continueProcess();
+      return continueProcess('Cannot find notifier, no alert can be issued');
     }
 
     sharedUser = sharedUser._source;
@@ -1445,7 +1430,7 @@ function issueAlert (notifierName, alertMessage, continueProcess) {
 
     if (!notifier) {
       console.log('Cannot find notifier, no alert can be issued');
-      return continueProcess();
+      return continueProcess('Cannot find notifier, no alert can be issued');
     }
 
     let notifierDefinition;
@@ -1456,14 +1441,13 @@ function issueAlert (notifierName, alertMessage, continueProcess) {
     }
     if (!notifierDefinition) {
       console.log('Cannot find notifier definition, no alert can be issued');
-      return continueProcess();
+      return continueProcess('Cannot find notifier, no alert can be issued');
     }
 
     let config = {};
     for (let field of notifierDefinition.fields) {
       for (let configuredField of notifier.fields) {
         if (configuredField.name === field.name && configuredField.value !== undefined) {
-          console.log('setting', field.name, 'to', configuredField.value);
           config[field.name] = configuredField.value;
         }
       }
@@ -1471,13 +1455,21 @@ function issueAlert (notifierName, alertMessage, continueProcess) {
       // If a field is required and nothing was set, then we have an error
       if (field.required && config[field.name] === undefined) {
         console.log(`Cannot find notifier field value: ${field.name}, no alert can be issued`);
-        continueProcess();
+        continueProcess(`Cannot find notifier field value: ${field.name}, no alert can be issued`);
       }
     }
 
-    notifierDefinition.sendAlert(config, alertMessage);
-
-    return continueProcess();
+    notifierDefinition.sendAlert(config, alertMessage, null, (response) => {
+      let err;
+      // there should only be one error here because only one
+      // notifier alert is sent at a time
+      if (response.errors) {
+        for (let e in response.errors) {
+          err = response.errors[e];
+        }
+      }
+      return continueProcess(err);
+    });
   });
 }
 
@@ -1491,7 +1483,7 @@ app.get('/notifierTypes', checkCookieToken, function (req, res) {
 
 // get created notifiers
 app.get('/notifiers', checkCookieToken, function (req, res) {
-  function cloneNotifiers(notifiers) {
+  function cloneNotifiers (notifiers) {
     var clone = {};
 
     for (var key in notifiers) {
@@ -1499,7 +1491,7 @@ app.get('/notifiers', checkCookieToken, function (req, res) {
         var notifier = notifiers[key];
         clone[key] = {
           name: notifier.name,
-          type : notifier.type
+          type: notifier.type
         };
       }
     }
@@ -1610,9 +1602,9 @@ app.post('/notifiers', [noCacheJson, getSettingUserDb, checkCookieToken], functi
         return res.molochError(500, 'Creating notifier failed');
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : 'Successfully created notifier',
-        name    : req.body.notifier.name
+        success: true,
+        text: 'Successfully created notifier',
+        name: req.body.notifier.name
       }));
     });
   });
@@ -1660,12 +1652,6 @@ app.put('/notifiers/:name', [noCacheJson, getSettingUserDb, checkCookieToken], f
 
     req.body.notifier.name = req.body.notifier.name.replace(/[^-a-zA-Z0-9_: ]/g, '');
 
-    if (req.body.notifier.name !== req.body.key &&
-      sharedUser.notifiers[req.body.notifier.name]) {
-      return res.molochError(403, `${req.body.notifier.name} already exists`);
-    }
-
-
     if (!internals.notifiers) { buildNotifiers(); }
 
     let foundNotifier;
@@ -1702,9 +1688,9 @@ app.put('/notifiers/:name', [noCacheJson, getSettingUserDb, checkCookieToken], f
         return res.molochError(500, 'Updating notifier failed');
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : 'Successfully updated notifier',
-        name    : req.body.notifier.name
+        success: true,
+        text: 'Successfully updated notifier',
+        name: req.body.notifier.name
       }));
     });
   });
@@ -1738,9 +1724,9 @@ app.delete('/notifiers/:name', [noCacheJson, getSettingUserDb, checkCookieToken]
         return res.molochError(500, 'Deleting notifier failed');
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : 'Successfully deleted notifier',
-        name    : req.params.name
+        success: true,
+        text: 'Successfully deleted notifier',
+        name: req.params.name
       }));
     });
   });
@@ -1753,10 +1739,14 @@ app.post('/notifiers/:name/test', [noCacheJson, getSettingUserCache, checkCookie
     return res.molochError(401, 'Need admin privelages to test a notifier');
   }
 
-  function continueProcess () {
+  function continueProcess (err) {
+    if (err) {
+      return res.molochError(500, `Error testing alert: ${err}`);
+    }
+
     return res.send(JSON.stringify({
-      success : true,
-      text    : `Successfully issued alert using the ${req.params.name} notifier.`
+      success: true,
+      text: `Successfully issued alert using the ${req.params.name} notifier.`
     }));
   }
 
@@ -1765,33 +1755,35 @@ app.post('/notifiers/:name/test', [noCacheJson, getSettingUserCache, checkCookie
 
 // gets a user's settings
 app.get('/user/settings', [noCacheJson, recordResponseTime, getSettingUserDb, checkPermissions(['webEnabled']), setCookie], (req, res) => {
-  let settings = req.settingUser.settings || settingDefaults;
+  let settings = (req.settingUser.settings)
+    ? Object.assign(JSON.parse(JSON.stringify(settingDefaults)), JSON.parse(JSON.stringify(req.settingUser.settings)))
+    : JSON.parse(JSON.stringify(settingDefaults));
 
   let cookieOptions = { path: app.locals.basePath, sameSite: 'Strict' };
   if (Config.isHTTPS()) { cookieOptions.secure = true; }
 
   res.cookie(
-     'MOLOCH-COOKIE',
-     Config.obj2auth({date: Date.now(), pid: process.pid, userId: req.user.userId}, true),
-     cookieOptions
+    'MOLOCH-COOKIE',
+    Config.obj2auth({ date: Date.now(), pid: process.pid, userId: req.user.userId }, true),
+    cookieOptions
   );
 
   return res.send(settings);
 });
 
 // updates a user's settings
-app.post('/user/settings/update', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function(req, res) {
+app.post('/user/settings/update', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function (req, res) {
   req.settingUser.settings = req.body;
   delete req.settingUser.settings.token;
 
-  Db.setUser(req.settingUser.userId, req.settingUser, function(err, info) {
+  Db.setUser(req.settingUser.userId, req.settingUser, function (err, info) {
     if (err) {
       console.log('/user/settings/update error', err, info);
       return res.molochError(500, 'Settings update failed');
     }
     return res.send(JSON.stringify({
-      success : true,
-      text    : 'Updated settings successfully'
+      success: true,
+      text: 'Updated settings successfully'
     }));
   });
 });
@@ -1831,10 +1823,10 @@ function saveSharedView (req, res, user, view, endpoint, successMessage, errorMe
         return res.molochError(500, errorMessage);
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : successMessage,
+        success: true,
+        text: successMessage,
         viewName: req.body.name,
-        view    : view
+        view: view
       }));
     });
   });
@@ -1892,15 +1884,15 @@ function unshareView (req, res, user, sharedUser, endpoint, successMessage, erro
         return res.molochError(500, errorMessage);
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : successMessage
+        success: true,
+        text: successMessage
       }));
     });
   });
 }
 
 // gets a user's views
-app.get('/user/views', [noCacheJson, getSettingUserCache], function(req, res) {
+app.get('/user/views', [noCacheJson, getSettingUserCache], function (req, res) {
   if (!req.settingUser) { return res.send({}); }
 
   // Clone the views so we don't modify that cached user
@@ -1925,7 +1917,7 @@ app.get('/user/views', [noCacheJson, getSettingUserCache], function(req, res) {
 
 // creates a new view for a user
 app.post('/user/views/create', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb, sanitizeViewName], function (req, res) {
-  if (!req.body.name)   { return res.molochError(403, 'Missing view name'); }
+  if (!req.body.name) { return res.molochError(403, 'Missing view name'); }
   if (!req.body.expression) { return res.molochError(403, 'Missing view expression'); }
 
   let user = req.settingUser;
@@ -1960,17 +1952,17 @@ app.post('/user/views/create', [noCacheJson, checkCookieToken, logAction(), getS
         return res.molochError(500, 'Create view failed');
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : 'Created view successfully',
+        success: true,
+        text: 'Created view successfully',
         viewName: req.body.name,
-        view    : newView
+        view: newView
       }));
     });
   }
 });
 
 // deletes a user's specified view
-app.post('/user/views/delete', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb, sanitizeViewName], function(req, res) {
+app.post('/user/views/delete', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb, sanitizeViewName], function (req, res) {
   if (!req.body.name) { return res.molochError(403, 'Missing view name'); }
 
   let user = req.settingUser;
@@ -1995,8 +1987,8 @@ app.post('/user/views/delete', [noCacheJson, checkCookieToken, logAction(), getS
           return res.molochError(500, 'Delete shared view failed');
         }
         return res.send(JSON.stringify({
-          success : true,
-          text    : 'Deleted shared view successfully'
+          success: true,
+          text: 'Deleted shared view successfully'
         }));
       });
     });
@@ -2010,8 +2002,8 @@ app.post('/user/views/delete', [noCacheJson, checkCookieToken, logAction(), getS
         return res.molochError(500, 'Delete view failed');
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : 'Deleted view successfully'
+        success: true,
+        text: 'Deleted view successfully'
       }));
     });
   }
@@ -2019,10 +2011,9 @@ app.post('/user/views/delete', [noCacheJson, checkCookieToken, logAction(), getS
 
 // shares/unshares a view
 app.post('/user/views/toggleShare', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb, sanitizeViewName], function (req, res) {
-  if (!req.body.name)       { return res.molochError(403, 'Missing view name'); }
+  if (!req.body.name) { return res.molochError(403, 'Missing view name'); }
   if (!req.body.expression) { return res.molochError(403, 'Missing view expression'); }
 
-  let view;
   let share = req.body.shared;
   let user = req.settingUser;
   user.views = user.views || {};
@@ -2054,8 +2045,6 @@ app.post('/user/views/toggleShare', [noCacheJson, checkCookieToken, logAction(),
       if (!user.createEnabled && sharedUser.views[req.body.name].user !== user.userId) {
         return res.molochError(401, `Need admin privelages to unshare another user's shared view`);
       }
-      // save the view for later to determine who the view belongs to
-      view = sharedUser.views[req.body.name];
       // delete the shared view
       delete sharedUser.views[req.body.name];
       return unshareView(req, res, user, sharedUser, '/user/views/toggleShare', 'Unshared view successfully', 'Unsharing view failed');
@@ -2065,9 +2054,9 @@ app.post('/user/views/toggleShare', [noCacheJson, checkCookieToken, logAction(),
 
 // updates a user's specified view
 app.post('/user/views/update', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb, sanitizeViewName], function (req, res) {
-  if (!req.body.name)       { return res.molochError(403, 'Missing view name'); }
+  if (!req.body.name) { return res.molochError(403, 'Missing view name'); }
   if (!req.body.expression) { return res.molochError(403, 'Missing view expression'); }
-  if (!req.body.key)        { return res.molochError(403, 'Missing view key'); }
+  if (!req.body.key) { return res.molochError(403, 'Missing view key'); }
 
   let user = req.settingUser;
   user.views = user.views || {};
@@ -2101,14 +2090,15 @@ app.post('/user/views/update', [noCacheJson, checkCookieToken, logAction(), getS
           return res.molochError(500, 'Update shared view failed');
         }
         return res.send(JSON.stringify({
-          success : true,
-          text    : 'Updated shared view successfully'
+          success: true,
+          text: 'Updated shared view successfully'
         }));
       });
     });
   } else {
     if (user.views[req.body.name]) {
       user.views[req.body.name].expression = req.body.expression;
+      user.views[req.body.name].sessionsColConfig = req.body.sessionsColConfig;
     } else { // the name has changed, so create a new entry
       user.views[req.body.name] = {
         expression: req.body.expression,
@@ -2124,26 +2114,26 @@ app.post('/user/views/update', [noCacheJson, checkCookieToken, logAction(), getS
       delete user.views[req.body.key];
     }
 
-    Db.setUser(user.userId, user, function(err, info) {
+    Db.setUser(user.userId, user, function (err, info) {
       if (err) {
         console.log('/user/views/update error', err, info);
         return res.molochError(500, 'Updating view failed');
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : 'Updated view successfully'
+        success: true,
+        text: 'Updated view successfully'
       }));
     });
   }
 });
 
 // gets a user's cron queries
-app.get('/user/cron', [noCacheJson, getSettingUserCache], function(req, res) {
-  if (!req.settingUser) {return res.molochError(403, 'Unknown user');}
+app.get('/user/cron', [noCacheJson, getSettingUserCache], function (req, res) {
+  if (!req.settingUser) { return res.molochError(403, 'Unknown user'); }
 
   var user = req.settingUser;
-  if (user.settings === undefined) {user.settings = {};}
-  Db.search('queries', 'query', {size:1000, query: {term: {creator: user.userId}}}, function (err, data) {
+  if (user.settings === undefined) { user.settings = {}; }
+  Db.search('queries', 'query', { size: 1000, query: { term: { creator: user.userId } } }, function (err, data) {
     if (err || data.error) {
       console.log('/user/cron error', err || data.error);
     }
@@ -2152,7 +2142,7 @@ app.get('/user/cron', [noCacheJson, getSettingUserCache], function(req, res) {
 
     if (data && data.hits && data.hits.hits) {
       user.queries = {};
-      data.hits.hits.forEach(function(item) {
+      data.hits.hits.forEach(function (item) {
         queries[item._id] = item._source;
       });
     }
@@ -2162,19 +2152,19 @@ app.get('/user/cron', [noCacheJson, getSettingUserCache], function(req, res) {
 });
 
 // creates a new cron query for a user
-app.post('/user/cron/create', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function(req, res) {
-  if (!req.body.name)   { return res.molochError(403, 'Missing cron query name'); }
-  if (!req.body.query)  { return res.molochError(403, 'Missing cron query expression'); }
+app.post('/user/cron/create', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function (req, res) {
+  if (!req.body.name) { return res.molochError(403, 'Missing cron query name'); }
+  if (!req.body.query) { return res.molochError(403, 'Missing cron query expression'); }
   if (!req.body.action) { return res.molochError(403, 'Missing cron query action'); }
-  if (!req.body.tags)   { return res.molochError(403, 'Missing cron query tag(s)'); }
+  if (!req.body.tags) { return res.molochError(403, 'Missing cron query tag(s)'); }
 
   var document = {
     doc: {
-      enabled : true,
-      name    : req.body.name,
-      query   : req.body.query,
-      tags    : req.body.tags,
-      action  : req.body.action,
+      enabled: true,
+      name: req.body.name,
+      query: req.body.query,
+      tags: req.body.tags,
+      action: req.body.action
     }
   };
 
@@ -2184,23 +2174,23 @@ app.post('/user/cron/create', [noCacheJson, checkCookieToken, logAction(), getSe
 
   var userId = req.settingUser.userId;
 
-  Db.getMinValue("sessions2-*", "timestamp", (err, minTimestamp) => {
+  Db.getMinValue('sessions2-*', 'timestamp', (err, minTimestamp) => {
     if (err || minTimestamp === 0 || minTimestamp === null) {
-      minTimestamp = Math.floor(Date.now()/1000);
+      minTimestamp = Math.floor(Date.now() / 1000);
     } else {
-      minTimestamp = Math.floor(minTimestamp/1000);
+      minTimestamp = Math.floor(minTimestamp / 1000);
     }
 
     if (+req.body.since === -1) {
-      document.doc.lpValue =  document.doc.lastRun = minTimestamp;
+      document.doc.lpValue = document.doc.lastRun = minTimestamp;
     } else {
-      document.doc.lpValue =  document.doc.lastRun =
-         Math.max(minTimestamp, Math.floor(Date.now()/1000) - 60*60*parseInt(req.body.since || '0', 10));
+      document.doc.lpValue = document.doc.lastRun =
+         Math.max(minTimestamp, Math.floor(Date.now() / 1000) - 60 * 60 * parseInt(req.body.since || '0', 10));
     }
     document.doc.count = 0;
     document.doc.creator = userId || 'anonymous';
 
-    Db.indexNow('queries', 'query', null, document.doc, function(err, info) {
+    Db.indexNow('queries', 'query', null, document.doc, function (err, info) {
       if (err) {
         console.log('/user/cron/create error', err, info);
         return res.molochError(500, 'Create cron query failed');
@@ -2209,45 +2199,45 @@ app.post('/user/cron/create', [noCacheJson, checkCookieToken, logAction(), getSe
         processCronQueries();
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : 'Created cron query successfully',
-        key     : info._id
+        success: true,
+        text: 'Created cron query successfully',
+        key: info._id
       }));
     });
   });
 });
 
 // deletes a user's specified cron query
-app.post('/user/cron/delete', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb, checkCronAccess], function(req, res) {
+app.post('/user/cron/delete', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb, checkCronAccess], function (req, res) {
   if (!req.body.key) { return res.molochError(403, 'Missing cron query key'); }
 
-  Db.deleteDocument('queries', 'query', req.body.key, {refresh: true}, function(err, sq) {
+  Db.deleteDocument('queries', 'query', req.body.key, { refresh: true }, function (err, sq) {
     if (err) {
       console.log('/user/cron/delete error', err, sq);
       return res.molochError(500, 'Delete cron query failed');
     }
     res.send(JSON.stringify({
-      success : true,
-      text    : 'Deleted cron query successfully'
+      success: true,
+      text: 'Deleted cron query successfully'
     }));
   });
 });
 
 // updates a user's specified cron query
-app.post('/user/cron/update', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb, checkCronAccess], function(req, res) {
-  if (!req.body.key)    { return res.molochError(403, 'Missing cron query key'); }
-  if (!req.body.name)   { return res.molochError(403, 'Missing cron query name'); }
-  if (!req.body.query)  { return res.molochError(403, 'Missing cron query expression'); }
+app.post('/user/cron/update', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb, checkCronAccess], function (req, res) {
+  if (!req.body.key) { return res.molochError(403, 'Missing cron query key'); }
+  if (!req.body.name) { return res.molochError(403, 'Missing cron query name'); }
+  if (!req.body.query) { return res.molochError(403, 'Missing cron query expression'); }
   if (!req.body.action) { return res.molochError(403, 'Missing cron query action'); }
-  if (!req.body.tags)   { return res.molochError(403, 'Missing cron query tag(s)'); }
+  if (!req.body.tags) { return res.molochError(403, 'Missing cron query tag(s)'); }
 
   var document = {
     doc: {
-      enabled : req.body.enabled,
-      name    : req.body.name,
-      query   : req.body.query,
-      tags    : req.body.tags,
-      action  : req.body.action,
+      enabled: req.body.enabled,
+      name: req.body.name,
+      query: req.body.query,
+      tags: req.body.tags,
+      action: req.body.action,
       notifier: undefined
     }
   };
@@ -2256,13 +2246,13 @@ app.post('/user/cron/update', [noCacheJson, checkCookieToken, logAction(), getSe
     document.doc.notifier = req.body.notifier;
   }
 
-  Db.get('queries', 'query', req.body.key, function(err, sq) {
+  Db.get('queries', 'query', req.body.key, function (err, sq) {
     if (err || !sq.found) {
       console.log('/user/cron/update failed', err, sq);
       return res.molochError(403, 'Unknown query');
     }
 
-    Db.update('queries', 'query', req.body.key, document, {refresh: true}, function(err, data) {
+    Db.update('queries', 'query', req.body.key, document, { refresh: true }, function (err, data) {
       if (err) {
         console.log('/user/cron/update error', err, document, data);
         return res.molochError(500, 'Cron query update failed');
@@ -2271,15 +2261,15 @@ app.post('/user/cron/update', [noCacheJson, checkCookieToken, logAction(), getSe
         processCronQueries();
       }
       return res.send(JSON.stringify({
-        success : true,
-        text    : 'Updated cron query successfully'
+        success: true,
+        text: 'Updated cron query successfully'
       }));
     });
   });
 });
 
 // changes a user's password
-app.post('/user/password/change', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function(req, res) {
+app.post('/user/password/change', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function (req, res) {
   if (!req.body.newPassword || req.body.newPassword.length < 3) {
     return res.molochError(403, 'New password needs to be at least 3 characters');
   }
@@ -2293,26 +2283,26 @@ app.post('/user/password/change', [noCacheJson, checkCookieToken, logAction(), g
   var user = req.settingUser;
   user.passStore = Config.pass2store(user.userId, req.body.newPassword);
 
-  Db.setUser(user.userId, user, function(err, info) {
+  Db.setUser(user.userId, user, function (err, info) {
     if (err) {
       console.log('/user/password/change error', err, info);
       return res.molochError(500, 'Update failed');
     }
     return res.send(JSON.stringify({
-      success : true,
-      text    : 'Changed password successfully'
+      success: true,
+      text: 'Changed password successfully'
     }));
   });
 });
 
-function oldDB2newDB(x) {
-  if (!internals.oldDBFields[x]) {return x;}
+function oldDB2newDB (x) {
+  if (!internals.oldDBFields[x]) { return x; }
   return internals.oldDBFields[x].dbField2;
 }
 
 // gets custom column configurations for a user
 app.get('/user/columns', [noCacheJson, getSettingUserCache, checkPermissions(['webEnabled'])], (req, res) => {
-  if (!req.settingUser) {return res.send([]);}
+  if (!req.settingUser) { return res.send([]); }
 
   // Fix for new names
   if (req.settingUser.columnConfigs) {
@@ -2329,10 +2319,10 @@ app.get('/user/columns', [noCacheJson, getSettingUserCache, checkPermissions(['w
 });
 
 // udpates custom column configurations for a user
-app.put('/user/columns/:name', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function(req, res) {
-  if (!req.body.name)     { return res.molochError(403, 'Missing custom column configuration name'); }
-  if (!req.body.columns)  { return res.molochError(403, 'Missing columns'); }
-  if (!req.body.order)    { return res.molochError(403, 'Missing sort order'); }
+app.put('/user/columns/:name', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function (req, res) {
+  if (!req.body.name) { return res.molochError(403, 'Missing custom column configuration name'); }
+  if (!req.body.columns) { return res.molochError(403, 'Missing columns'); }
+  if (!req.body.order) { return res.molochError(403, 'Missing sort order'); }
 
   let user = req.settingUser;
   user.columnConfigs = user.columnConfigs || [];
@@ -2348,24 +2338,24 @@ app.put('/user/columns/:name', [noCacheJson, checkCookieToken, logAction(), getS
 
   if (!found) { return res.molochError(200, 'Custom column configuration not found'); }
 
-  Db.setUser(user.userId, user, function(err, info) {
+  Db.setUser(user.userId, user, function (err, info) {
     if (err) {
       console.log('/user/columns udpate error', err, info);
       return res.molochError(500, 'Update custom column configuration failed');
     }
     return res.send(JSON.stringify({
-      success   : true,
-      text      : 'Updated column configuration',
-      colConfig : req.body
+      success: true,
+      text: 'Updated column configuration',
+      colConfig: req.body
     }));
   });
 });
 
 // creates a new custom column configuration for a user
-app.post('/user/columns/create', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function(req, res) {
-  if (!req.body.name)     { return res.molochError(403, 'Missing custom column configuration name'); }
-  if (!req.body.columns)  { return res.molochError(403, 'Missing columns'); }
-  if (!req.body.order)    { return res.molochError(403, 'Missing sort order'); }
+app.post('/user/columns/create', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function (req, res) {
+  if (!req.body.name) { return res.molochError(403, 'Missing custom column configuration name'); }
+  if (!req.body.columns) { return res.molochError(403, 'Missing columns'); }
+  if (!req.body.order) { return res.molochError(403, 'Missing sort order'); }
 
   req.body.name = req.body.name.replace(/[^-a-zA-Z0-9\s_:]/g, '');
   if (req.body.name.length < 1) {
@@ -2383,26 +2373,26 @@ app.post('/user/columns/create', [noCacheJson, checkCookieToken, logAction(), ge
   }
 
   user.columnConfigs.push({
-    name    : req.body.name,
-    columns : req.body.columns,
-    order   : req.body.order
+    name: req.body.name,
+    columns: req.body.columns,
+    order: req.body.order
   });
 
-  Db.setUser(user.userId, user, function(err, info) {
+  Db.setUser(user.userId, user, function (err, info) {
     if (err) {
       console.log('/user/columns/create error', err, info);
       return res.molochError(500, 'Create custom column configuration failed');
     }
     return res.send(JSON.stringify({
-      success : true,
-      text    : 'Created custom column configuration successfully',
-      name    : req.body.name
+      success: true,
+      text: 'Created custom column configuration successfully',
+      name: req.body.name
     }));
   });
 });
 
 // deletes a user's specified custom column configuration
-app.post('/user/columns/delete', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function(req, res) {
+app.post('/user/columns/delete', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function (req, res) {
   if (!req.body.name) { return res.molochError(403, 'Missing custom column configuration name'); }
 
   var user = req.settingUser;
@@ -2417,30 +2407,30 @@ app.post('/user/columns/delete', [noCacheJson, checkCookieToken, logAction(), ge
     }
   }
 
-  if (!found) { return res.molochError(200, "Column not found"); }
+  if (!found) { return res.molochError(200, 'Column not found'); }
 
-  Db.setUser(user.userId, user, function(err, info) {
+  Db.setUser(user.userId, user, function (err, info) {
     if (err) {
       console.log('/user/columns/delete failed', err, info);
       return res.molochError(500, 'Delete custom column configuration failed');
     }
     return res.send(JSON.stringify({
-      success : true,
-      text    : 'Deleted custom column configuration successfully'
+      success: true,
+      text: 'Deleted custom column configuration successfully'
     }));
   });
 });
 
 // gets custom spiview fields configurations for a user
 app.get('/user/spiview/fields', [noCacheJson, getSettingUserCache, checkPermissions(['webEnabled'])], (req, res) => {
-  if (!req.settingUser) {return res.send([]);}
+  if (!req.settingUser) { return res.send([]); }
 
   return res.send(req.settingUser.spiviewFieldConfigs || []);
 });
 
 // udpates custom spiview field configuration for a user
-app.put('/user/spiview/fields/:name', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function(req, res) {
-  if (!req.body.name)   { return res.molochError(403, 'Missing custom spiview field configuration name'); }
+app.put('/user/spiview/fields/:name', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function (req, res) {
+  if (!req.body.name) { return res.molochError(403, 'Missing custom spiview field configuration name'); }
   if (!req.body.fields) { return res.molochError(403, 'Missing fields'); }
 
   let user = req.settingUser;
@@ -2457,22 +2447,22 @@ app.put('/user/spiview/fields/:name', [noCacheJson, checkCookieToken, logAction(
 
   if (!found) { return res.molochError(200, 'Custom spiview field configuration not found'); }
 
-  Db.setUser(user.userId, user, function(err, info) {
+  Db.setUser(user.userId, user, function (err, info) {
     if (err) {
       console.log('/user/spiview/fields udpate error', err, info);
       return res.molochError(500, 'Update spiview field configuration failed');
     }
     return res.send(JSON.stringify({
-      success   : true,
-      text      : 'Updated spiview field configuration',
-      colConfig : req.body
+      success: true,
+      text: 'Updated spiview field configuration',
+      colConfig: req.body
     }));
   });
 });
 
 // creates a new custom spiview fields configuration for a user
-app.post('/user/spiview/fields/create', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function(req, res) {
-  if (!req.body.name)   { return res.molochError(403, 'Missing custom spiview field configuration name'); }
+app.post('/user/spiview/fields/create', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function (req, res) {
+  if (!req.body.name) { return res.molochError(403, 'Missing custom spiview field configuration name'); }
   if (!req.body.fields) { return res.molochError(403, 'Missing fields'); }
 
   req.body.name = req.body.name.replace(/[^-a-zA-Z0-9\s_:]/g, '');
@@ -2492,25 +2482,25 @@ app.post('/user/spiview/fields/create', [noCacheJson, checkCookieToken, logActio
   }
 
   user.spiviewFieldConfigs.push({
-    name  : req.body.name,
+    name: req.body.name,
     fields: req.body.fields
   });
 
-  Db.setUser(user.userId, user, function(err, info) {
+  Db.setUser(user.userId, user, function (err, info) {
     if (err) {
       console.log('/user/spiview/fields/create error', err, info);
       return res.molochError(500, 'Create custom spiview fields configuration failed');
     }
     return res.send(JSON.stringify({
-      success : true,
-      text    : 'Created custom spiview fields configuration successfully',
-      name    : req.body.name
+      success: true,
+      text: 'Created custom spiview fields configuration successfully',
+      name: req.body.name
     }));
   });
 });
 
 // deletes a user's specified custom spiview fields configuration
-app.post('/user/spiview/fields/delete', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function(req, res) {
+app.post('/user/spiview/fields/delete', [noCacheJson, checkCookieToken, logAction(), getSettingUserDb], function (req, res) {
   if (!req.body.name) { return res.molochError(403, 'Missing custom spiview fields configuration name'); }
 
   var user = req.settingUser;
@@ -2525,99 +2515,97 @@ app.post('/user/spiview/fields/delete', [noCacheJson, checkCookieToken, logActio
     }
   }
 
-  if (!found) { return res.molochError(200, "Spiview fields not found"); }
+  if (!found) { return res.molochError(200, 'Spiview fields not found'); }
 
-  Db.setUser(user.userId, user, function(err, info) {
+  Db.setUser(user.userId, user, function (err, info) {
     if (err) {
       console.log('/user/spiview/fields/delete failed', err, info);
       return res.molochError(500, 'Delete custom spiview fields configuration failed');
     }
     return res.send(JSON.stringify({
-      success : true,
-      text    : 'Deleted custom spiview fields configuration successfully'
+      success: true,
+      text: 'Deleted custom spiview fields configuration successfully'
     }));
   });
 });
 
-
-app.get('/decodings', [noCacheJson], function(req, res) {
+app.get('/decodings', [noCacheJson], function (req, res) {
   var decodeItems = decode.settings();
   res.send(JSON.stringify(decodeItems));
 });
 
-
-//////////////////////////////////////////////////////////////////////////////////
-//// EXPIRING
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// EXPIRING
+// ----------------------------------------------------------------------------
 // Search for all files on a set of nodes in a set of directories.
 // If less then size items are returned we don't delete anything.
 // Doesn't support mounting sub directories in main directory, don't do it.
 function expireDevice (nodes, dirs, minFreeSpaceG, nextCb) {
   var query = { _source: [ 'num', 'name', 'first', 'size', 'node' ],
-                  from: '0',
-                  size: 200,
-                 query: { bool: {
-                    must: [
-                          {terms: {node: nodes}},
-                          { bool: {should: []}}
-                        ],
-                    must_not: { term: {locked: 1}}
-                }},
-                sort: { first: { order: 'asc' } } };
+    from: '0',
+    size: 200,
+    query: { bool: {
+      must: [
+        { terms: { node: nodes } },
+        { bool: { should: [] } }
+      ],
+      must_not: { term: { locked: 1 } }
+    } },
+    sort: { first: { order: 'asc' } } };
 
-  Object.keys(dirs).forEach( function (pcapDir) {
-    var obj = {wildcard: {}};
-    if (pcapDir[pcapDir.length - 1] === "/") {
-      obj.wildcard.name = pcapDir + "*";
+  Object.keys(dirs).forEach(function (pcapDir) {
+    var obj = { wildcard: {} };
+    if (pcapDir[pcapDir.length - 1] === '/') {
+      obj.wildcard.name = pcapDir + '*';
     } else {
-      obj.wildcard.name = pcapDir + "/*";
+      obj.wildcard.name = pcapDir + '/*';
     }
     query.query.bool.must[1].bool.should.push(obj);
   });
 
   // Keep at least 10 files
-  Db.search('files', 'file', query, function(err, data) {
-      if (err || data.error || !data.hits || data.hits.total <= 10) {
-        return nextCb();
+  Db.search('files', 'file', query, function (err, data) {
+    if (err || data.error || !data.hits || data.hits.total <= 10) {
+      return nextCb();
+    }
+    async.forEachSeries(data.hits.hits, function (item, forNextCb) {
+      if (data.hits.total <= 10) {
+        return forNextCb('DONE');
       }
-      async.forEachSeries(data.hits.hits, function(item, forNextCb) {
-        if (data.hits.total <= 10) {
-          return forNextCb("DONE");
-        }
 
-        var fields = item._source || item.fields;
+      var fields = item._source || item.fields;
 
-        var freeG;
-        try {
-          var stat = fs.statVFS(fields.name);
-          freeG = stat.f_frsize/1024.0*stat.f_bavail/(1024.0*1024.0);
-        } catch (e) {
-          console.log("ERROR", e);
-          // File doesn't exist, delete it
-          freeG = minFreeSpaceG - 1;
-        }
-        if (freeG < minFreeSpaceG) {
-          data.hits.total--;
-          console.log("Deleting", item);
-          return Db.deleteFile(fields.node, item._id, fields.name, forNextCb);
-        } else {
-          return forNextCb("DONE");
-        }
-      }, function () {
-        return nextCb();
-      });
+      var freeG;
+      try {
+        var stat = fse.statVFS(fields.name);
+        freeG = stat.f_frsize / 1024.0 * stat.f_bavail / (1024.0 * 1024.0);
+      } catch (e) {
+        console.log('ERROR', e);
+        // File doesn't exist, delete it
+        freeG = minFreeSpaceG - 1;
+      }
+      if (freeG < minFreeSpaceG) {
+        data.hits.total--;
+        console.log('Deleting', item);
+        return Db.deleteFile(fields.node, item._id, fields.name, forNextCb);
+      } else {
+        return forNextCb('DONE');
+      }
+    }, function () {
+      return nextCb();
+    });
   });
 }
 
 function expireCheckDevice (nodes, stat, nextCb) {
   var doit = false;
   var minFreeSpaceG = 0;
-  async.forEach(nodes, function(node, cb) {
-    var freeSpaceG = Config.getFull(node, "freeSpaceG", "5%");
-    if (freeSpaceG[freeSpaceG.length-1] === "%") {
-      freeSpaceG = (+freeSpaceG.substr(0,freeSpaceG.length-1)) * 0.01 * stat.f_frsize/1024.0*stat.f_blocks/(1024.0*1024.0);
+  async.forEach(nodes, function (node, cb) {
+    var freeSpaceG = Config.getFull(node, 'freeSpaceG', '5%');
+    if (freeSpaceG[freeSpaceG.length - 1] === '%') {
+      freeSpaceG = (+freeSpaceG.substr(0, freeSpaceG.length - 1)) * 0.01 * stat.f_frsize / 1024.0 * stat.f_blocks / (1024.0 * 1024.0);
     }
-    var freeG = stat.f_frsize/1024.0*stat.f_bavail/(1024.0*1024.0);
+    var freeG = stat.f_frsize / 1024.0 * stat.f_bavail / (1024.0 * 1024.0);
     if (freeG < freeSpaceG) {
       doit = true;
     }
@@ -2639,7 +2627,7 @@ function expireCheckDevice (nodes, stat, nextCb) {
 function expireCheckAll () {
   var devToStat = {};
   // Find all the nodes running on this host
-  Db.hostnameToNodeids(Config.hostName(), function(nodes) {
+  Db.hostnameToNodeids(Config.hostName(), function (nodes) {
     // Current node name should always be checked too
     if (!nodes.includes(Config.nodeName())) {
       nodes.push(Config.nodeName());
@@ -2647,18 +2635,18 @@ function expireCheckAll () {
 
     // Find all the pcap dirs for local nodes
     async.map(nodes, function (node, cb) {
-      var pcapDirs = Config.getFull(node, "pcapDir");
-      if (typeof pcapDirs !== "string") {
-        return cb("ERROR - couldn't find pcapDir setting for node: " + node + "\nIf you have it set try running:\nnpm remove iniparser; npm cache clean; npm update iniparser");
+      var pcapDirs = Config.getFull(node, 'pcapDir');
+      if (typeof pcapDirs !== 'string') {
+        return cb("ERROR - couldn't find pcapDir setting for node: " + node + '\nIf you have it set try running:\nnpm remove iniparser; npm cache clean; npm update iniparser');
       }
       // Create a mapping from device id to stat information and all directories on that device
-      pcapDirs.split(";").forEach(function (pcapDir) {
+      pcapDirs.split(';').forEach(function (pcapDir) {
         if (!pcapDir) {
           return; // Skip empty elements.  Prevents errors when pcapDir has a trailing or double ;
         }
         pcapDir = pcapDir.trim();
         var fileStat = fs.statSync(pcapDir);
-        var vfsStat = fs.statVFS(pcapDir);
+        var vfsStat = fse.statVFS(pcapDir);
         if (!devToStat[fileStat.dev]) {
           vfsStat.dirs = {};
           vfsStat.dirs[pcapDir] = {};
@@ -2679,18 +2667,17 @@ function expireCheckAll () {
     });
   });
 }
-//////////////////////////////////////////////////////////////////////////////////
-//// Sessions Query
-//////////////////////////////////////////////////////////////////////////////////
-function addSortToQuery(query, info, d) {
-
-  function addSortDefault() {
+// ----------------------------------------------------------------------------
+// Sessions Query
+// ----------------------------------------------------------------------------
+function addSortToQuery (query, info, d) {
+  function addSortDefault () {
     if (d) {
       if (!query.sort) {
         query.sort = [];
       }
       var obj = {};
-      obj[d] = {order: "asc"};
+      obj[d] = { order: 'asc' };
       obj[d].missing = '_last';
       query.sort.push(obj);
     }
@@ -2712,29 +2699,29 @@ function addSortToQuery(query, info, d) {
       query.sort = [];
     }
 
-    info.order.split(",").forEach(function(item) {
-      var parts = item.split(":");
+    info.order.split(',').forEach(function (item) {
+      var parts = item.split(':');
       var field = parts[0];
 
       var obj = {};
-      if (field === "firstPacket") {
-        obj.firstPacket = {order: parts[1]};
-      } else if (field === "lastPacket") {
-        obj.lastPacket = {order: parts[1]};
+      if (field === 'firstPacket') {
+        obj.firstPacket = { order: parts[1] };
+      } else if (field === 'lastPacket') {
+        obj.lastPacket = { order: parts[1] };
       } else {
-        obj[field] = {order: parts[1]};
+        obj[field] = { order: parts[1] };
       }
 
-      obj[field].unmapped_type = "string";
-      var fieldInfo  = Config.getDBFieldsMap()[field];
+      obj[field].unmapped_type = 'string';
+      var fieldInfo = Config.getDBFieldsMap()[field];
       if (fieldInfo) {
-        if (fieldInfo.type === "ip") {
-          obj[field].unmapped_type = "ip";
-        } else if (fieldInfo.type === "integer") {
-          obj[field].unmapped_type = "long";
+        if (fieldInfo.type === 'ip') {
+          obj[field].unmapped_type = 'ip';
+        } else if (fieldInfo.type === 'integer') {
+          obj[field].unmapped_type = 'long';
         }
       }
-      obj[field].missing = (parts[1] === 'asc'?'_last':'_first');
+      obj[field].missing = (parts[1] === 'asc' ? '_last' : '_first');
       query.sort.push(obj);
     });
     return;
@@ -2751,19 +2738,19 @@ function addSortToQuery(query, info, d) {
   }
 
   for (let i = 0, ilen = parseInt(info.iSortingCols, 10); i < ilen; i++) {
-    if (!info["iSortCol_" + i] || !info["sSortDir_" + i] || !info["mDataProp_" + info["iSortCol_" + i]]) {
+    if (!info['iSortCol_' + i] || !info['sSortDir_' + i] || !info['mDataProp_' + info['iSortCol_' + i]]) {
       continue;
     }
 
     var obj = {};
-    var field = info["mDataProp_" + info["iSortCol_" + i]];
-    obj[field] = {order: info["sSortDir_" + i]};
+    var field = info['mDataProp_' + info['iSortCol_' + i]];
+    obj[field] = { order: info['sSortDir_' + i] };
     query.sort.push(obj);
 
-    if (field === "firstPacket") {
-      query.sort.push({firstPacket: {order: info["sSortDir_" + i]}});
-    } else if (field === "lastPacket") {
-      query.sort.push({lastPacket: {order: info["sSortDir_" + i]}});
+    if (field === 'firstPacket') {
+      query.sort.push({ firstPacket: { order: info['sSortDir_' + i] } });
+    } else if (field === 'lastPacket') {
+      query.sort.push({ lastPacket: { order: info['sSortDir_' + i] } });
     }
   }
 }
@@ -2772,8 +2759,8 @@ function addSortToQuery(query, info, d) {
  * understands.  This includes mapping all the tag fields from strings to numbers
  * and any of the filename stuff
  */
-function lookupQueryItems(query, doneCb) {
-  if (Config.get("multiES", false)) {
+function lookupQueryItems (query, doneCb) {
+  if (Config.get('multiES', false)) {
     return doneCb(null);
   }
 
@@ -2781,10 +2768,9 @@ function lookupQueryItems(query, doneCb) {
   var finished = 0;
   var err = null;
 
-  //jshint latedef: nofunc
-  function process(parent, obj, item) {
+  function process (parent, obj, item) {
     // console.log("\nprocess:\n", item, obj, typeof obj[item], "\n");
-    if (item === "fileand" && typeof obj[item] === "string") {
+    if (item === 'fileand' && typeof obj[item] === 'string') {
       var name = obj.fileand;
       delete obj.fileand;
       outstanding++;
@@ -2793,12 +2779,12 @@ function lookupQueryItems(query, doneCb) {
         if (files === null || files.length === 0) {
           err = "File '" + name + "' not found";
         } else if (files.length > 1) {
-          obj.bool = {should: []};
-          files.forEach(function(file) {
-            obj.bool.should.push({bool: {must: [{term: {node: file.node}}, {term: {fileId: file.num}}]}});
+          obj.bool = { should: [] };
+          files.forEach(function (file) {
+            obj.bool.should.push({ bool: { must: [{ term: { node: file.node } }, { term: { fileId: file.num } }] } });
           });
         } else {
-          obj.bool = {must: [{term: {node: files[0].node}}, {term: {fileId: files[0].num}}]};
+          obj.bool = { must: [{ term: { node: files[0].node } }, { term: { fileId: files[0].num } }] };
         }
         if (finished && outstanding === 0) {
           doneCb(err);
@@ -2806,12 +2792,12 @@ function lookupQueryItems(query, doneCb) {
       });
     } else if (item === 'field' && obj.field === 'fileand') {
       obj.field = 'fileId';
-    } else if (typeof obj[item] === "object") {
+    } else if (typeof obj[item] === 'object') {
       convert(obj, obj[item]);
     }
   }
 
-  function convert(parent, obj) {
+  function convert (parent, obj) {
     for (var item in obj) {
       process(parent, obj, item);
     }
@@ -2825,29 +2811,109 @@ function lookupQueryItems(query, doneCb) {
   finished = 1;
 }
 
-function buildSessionQuery (req, buildCb) {
+// ----------------------------------------------------------------------------
+// determineQueryTimes(reqQuery)
+//
+// Returns [startTimeSec, stopTimeSec, interval] using values from reqQuery.date,
+//   reqQuery.startTime, reqQuery.stopTime, reqQuery.interval, and
+//   reqQuery.segments.
+//
+// This code was factored out from buildSessionQuery.
+// ----------------------------------------------------------------------------
+function determineQueryTimes (reqQuery) {
+  let startTimeSec = null;
+  let stopTimeSec = null;
+  let interval = 60 * 60;
+
+  if (Config.debug) {
+    console.log('determineQueryTimes<-', reqQuery);
+  }
+
+  if ((reqQuery.date && reqQuery.date === '-1') ||
+      (reqQuery.segments && reqQuery.segments === 'all')) {
+    interval = 60 * 60; // Hour to be safe
+  } else if ((reqQuery.startTime !== undefined) && (reqQuery.stopTime !== undefined)) {
+    if (!/^-?[0-9]+$/.test(reqQuery.startTime)) {
+      startTimeSec = Date.parse(reqQuery.startTime.replace('+', ' ')) / 1000;
+    } else {
+      startTimeSec = parseInt(reqQuery.startTime, 10);
+    }
+
+    if (!/^-?[0-9]+$/.test(reqQuery.stopTime)) {
+      stopTimeSec = Date.parse(reqQuery.stopTime.replace('+', ' ')) / 1000;
+    } else {
+      stopTimeSec = parseInt(reqQuery.stopTime, 10);
+    }
+
+    var diff = reqQuery.stopTime - reqQuery.startTime;
+    if (diff < 30 * 60) {
+      interval = 1; // second
+    } else if (diff <= 5 * 24 * 60 * 60) {
+      interval = 60; // minute
+    } else {
+      interval = 60 * 60; // hour
+    }
+  } else {
+    let queryDate = reqQuery.date || 1;
+    startTimeSec = (Math.floor(Date.now() / 1000) - 60 * 60 * parseInt(queryDate, 10));
+    stopTimeSec = Date.now() / 1000;
+
+    if (queryDate <= 5 * 24) {
+      interval = 60; // minute
+    } else {
+      interval = 60 * 60; // hour
+    }
+  }
+
+  switch (reqQuery.interval) {
+  case 'second':
+    interval = 1;
+    break;
+  case 'minute':
+    interval = 60;
+    break;
+  case 'hour':
+    interval = 60 * 60;
+    break;
+  case 'day':
+    interval = 60 * 60 * 24;
+    break;
+  case 'week':
+    interval = 60 * 60 * 24 * 7;
+    break;
+  }
+
+  if (Config.debug) {
+    console.log('determineQueryTimes->', 'startTimeSec', startTimeSec, 'stopTimeSec', stopTimeSec, 'interval', interval);
+  }
+
+  return [startTimeSec, stopTimeSec, interval];
+}
+
+function buildSessionQuery (req, buildCb, queryOverride = null) {
   // validate time limit is not exceeded
   let timeLimitExceeded = false;
+  var interval;
 
-  if (parseInt(req.query.date) > parseInt(req.user.timeLimit) ||
-    (req.query.date === '-1') && req.user.timeLimit) {
+  // queryOverride can supercede req.query if specified
+  let reqQuery = queryOverride || req.query;
+
+  // determineQueryTimes calculates startTime, stopTime, and interval from reqQuery
+  let startAndStopParams = determineQueryTimes(reqQuery);
+  if (startAndStopParams[0] !== undefined) {
+    reqQuery.startTime = startAndStopParams[0];
+  }
+  if (startAndStopParams[1] !== undefined) {
+    reqQuery.stopTime = startAndStopParams[1];
+  }
+  interval = startAndStopParams[2];
+
+  if ((parseInt(reqQuery.date) > parseInt(req.user.timeLimit)) ||
+    ((reqQuery.date === '-1') && req.user.timeLimit)) {
     timeLimitExceeded = true;
-  } else if (req.query.startTime && req.query.stopTime) {
-    if (! /^[0-9]+$/.test(req.query.startTime)) {
-      req.query.startTime = Date.parse(req.query.startTime.replace('+', ' ')) / 1000;
-    } else {
-      req.query.startTime = parseInt(req.query.startTime, 10);
-    }
-
-    if (! /^[0-9]+$/.test(req.query.stopTime)) {
-      req.query.stopTime = Date.parse(req.query.stopTime.replace('+', ' ')) / 1000;
-    } else {
-      req.query.stopTime = parseInt(req.query.stopTime, 10);
-    }
-
-    if (req.user.timeLimit && (req.query.stopTime - req.query.startTime) / 3600 > req.user.timeLimit) {
-      timeLimitExceeded = true;
-    }
+  } else if ((reqQuery.startTime) && (reqQuery.stopTime) && (req.user.timeLimit) &&
+             ((reqQuery.stopTime - reqQuery.startTime) / 3600 > req.user.timeLimit)) {
+    timeLimitExceeded = true;
   }
 
   if (timeLimitExceeded) {
@@ -2855,208 +2921,188 @@ function buildSessionQuery (req, buildCb) {
     return buildCb(`User time limit (${req.user.timeLimit} hours) exceeded`, {});
   }
 
-  var limit = Math.min(2000000, +req.query.length || +req.query.iDisplayLength || 100);
+  var limit = Math.min(2000000, +reqQuery.length || +reqQuery.iDisplayLength || 100);
 
-  var query = {from: req.query.start || req.query.iDisplayStart || 0,
-               size: limit,
-               timeout: internals.esQueryTimeout,
-               query: {bool: {filter: []}}
-              };
+  var query = { from: reqQuery.start || reqQuery.iDisplayStart || 0,
+    size: limit,
+    timeout: internals.esQueryTimeout,
+    query: { bool: { filter: [] } }
+  };
 
   if (query.from === 0) {
     delete query.from;
   }
 
-  if (req.query.strictly === "true") {
-    req.query.bounding = "both";
+  if (reqQuery.strictly === 'true') {
+    reqQuery.bounding = 'both';
   }
 
-  var interval;
-  if ((req.query.date && req.query.date === '-1') ||
-      (req.query.segments && req.query.segments === "all")) {
-    interval = 60*60; // Hour to be safe
-  } else if (req.query.startTime !== undefined && req.query.stopTime) {
-    switch (req.query.bounding) {
-    case "first":
-      query.query.bool.filter.push({range: {firstPacket: {gte: req.query.startTime*1000, lte: req.query.stopTime*1000}}});
-      break;
-    default:
-    case "last":
-      query.query.bool.filter.push({range: {lastPacket: {gte: req.query.startTime*1000, lte: req.query.stopTime*1000}}});
-      break;
-    case "both":
-      query.query.bool.filter.push({range: {firstPacket: {gte: req.query.startTime*1000}}});
-      query.query.bool.filter.push({range: {lastPacket: {lte: req.query.stopTime*1000}}});
-      break;
-    case "either":
-      query.query.bool.filter.push({range: {firstPacket: {lte: req.query.stopTime*1000}}});
-      query.query.bool.filter.push({range: {lastPacket: {gte: req.query.startTime*1000}}});
-      break;
-    case "database":
-      query.query.bool.filter.push({range: {timestamp: {gte: req.query.startTime*1000, lte: req.query.stopTime*1000}}});
-      break;
-    }
+  if ((reqQuery.date && reqQuery.date === '-1') ||
+      (reqQuery.segments && reqQuery.segments === 'all')) {
+    // interval is already assigned above from result of determineQueryTimes
 
-    var diff = req.query.stopTime - req.query.startTime;
-    if (diff < 30*60) {
-      interval = 1; // second
-    } else if (diff <= 5*24*60*60) {
-      interval = 60; // minute
-    } else {
-      interval = 60*60; // hour
-    }
-  } else {
-    if (!req.query.date) {
-      req.query.date = 1;
-    }
-    req.query.startTime = (Math.floor(Date.now() / 1000) - 60*60*parseInt(req.query.date, 10));
-    req.query.stopTime = Date.now()/1000;
-
-    switch (req.query.bounding) {
-    case "first":
-      query.query.bool.filter.push({range: {firstPacket: {gte: req.query.startTime*1000}}});
-      break;
-    default:
-    case "both":
-    case "last":
-      query.query.bool.filter.push({range: {lastPacket: {gte: req.query.startTime*1000}}});
-      break;
-    case "either":
-      query.query.bool.filter.push({range: {firstPacket: {lte: req.query.stopTime*1000}}});
-      query.query.bool.filter.push({range: {lastPacket: {gte: req.query.startTime*1000}}});
-      break;
-    case "database":
-      query.query.bool.filter.push({range: {timestamp: {gte: req.query.startTime*1000}}});
-      break;
-    }
-
-    if (req.query.date <= 5*24) {
-      interval = 60; // minute
-    } else {
-      interval = 60 * 60; // hour
-    }
-  }
-
-  switch (req.query.interval) {
-    case 'second':
-      interval = 1;
-      break;
-    case 'minute':
-      interval = 60;
-      break;
-    case 'hour':
-      interval = 60 * 60;
-      break;
-    case 'day':
-      interval = 60 * 60 * 24;
-      break;
-    case 'week':
-      interval = 60 * 60 * 24 * 7;
-      break;
-  }
-
-  if (req.query.facets) {
-    query.aggregations = {};
-    // only add map aggregations if requested
-    if (req.query.map === 'true') {
-      query.aggregations = {
-        mapG1: { terms: { field: 'srcGEO', size: 1000, min_doc_count: 1} },
-        mapG2: { terms: { field: 'dstGEO', size: 1000, min_doc_count: 1} },
-        mapG3: { terms: { field: 'http.xffGEO', size: 1000, min_doc_count: 1} }
-      };
-    }
-    query.aggregations.dbHisto = {
-      aggregations: {
-        srcDataBytes: { sum: { field: 'srcDataBytes' } },
-        dstDataBytes: { sum: { field: 'dstDataBytes' } },
-        srcBytes: { sum: { field: 'srcBytes' } },
-        dstBytes: { sum: { field: 'dstBytes' } },
-        srcPackets: { sum: { field: 'srcPackets' } },
-        dstPackets: { sum: { field: 'dstPackets' } }
-      }
-    };
-
-    switch (req.query.bounding) {
+  } else if (reqQuery.startTime !== undefined && reqQuery.stopTime) {
+    switch (reqQuery.bounding) {
     case 'first':
-       query.aggregations.dbHisto.histogram = { field:'firstPacket', interval:interval*1000, min_doc_count:1 };
+      query.query.bool.filter.push({ range: { firstPacket: { gte: reqQuery.startTime * 1000, lte: reqQuery.stopTime * 1000 } } });
+      break;
+    default:
+    case 'last':
+      query.query.bool.filter.push({ range: { lastPacket: { gte: reqQuery.startTime * 1000, lte: reqQuery.stopTime * 1000 } } });
+      break;
+    case 'both':
+      query.query.bool.filter.push({ range: { firstPacket: { gte: reqQuery.startTime * 1000 } } });
+      query.query.bool.filter.push({ range: { lastPacket: { lte: reqQuery.stopTime * 1000 } } });
+      break;
+    case 'either':
+      query.query.bool.filter.push({ range: { firstPacket: { lte: reqQuery.stopTime * 1000 } } });
+      query.query.bool.filter.push({ range: { lastPacket: { gte: reqQuery.startTime * 1000 } } });
       break;
     case 'database':
-      query.aggregations.dbHisto.histogram = { field:'timestamp', interval:interval*1000, min_doc_count:1 };
+      query.query.bool.filter.push({ range: { timestamp: { gte: reqQuery.startTime * 1000, lte: reqQuery.stopTime * 1000 } } });
+      break;
+    }
+  } else {
+    switch (reqQuery.bounding) {
+    case 'first':
+      query.query.bool.filter.push({ range: { firstPacket: { gte: reqQuery.startTime * 1000 } } });
       break;
     default:
-      query.aggregations.dbHisto.histogram = { field:'lastPacket', interval:interval*1000, min_doc_count:1 };
+    case 'both':
+    case 'last':
+      query.query.bool.filter.push({ range: { lastPacket: { gte: reqQuery.startTime * 1000 } } });
+      break;
+    case 'either':
+      query.query.bool.filter.push({ range: { firstPacket: { lte: reqQuery.stopTime * 1000 } } });
+      query.query.bool.filter.push({ range: { lastPacket: { gte: reqQuery.startTime * 1000 } } });
+      break;
+    case 'database':
+      query.query.bool.filter.push({ range: { timestamp: { gte: reqQuery.startTime * 1000 } } });
       break;
     }
   }
 
-  addSortToQuery(query, req.query, 'firstPacket');
+  if (reqQuery.facets === '1') {
+    query.aggregations = {};
+    // only add map aggregations if requested
+    if (reqQuery.map === 'true') {
+      query.aggregations = {
+        mapG1: { terms: { field: 'srcGEO', size: 1000, min_doc_count: 1 } },
+        mapG2: { terms: { field: 'dstGEO', size: 1000, min_doc_count: 1 } },
+        mapG3: { terms: { field: 'http.xffGEO', size: 1000, min_doc_count: 1 } }
+      };
+    }
+
+    query.aggregations.dbHisto = { aggregations: {} };
+
+    let filters = req.user.settings.timelineDataFilters || settingDefaults.timelineDataFilters;
+    for (let i = 0; i < filters.length; i++) {
+      let filter = filters[i];
+
+      // Will also grap src/dst of these options instead to show on the timeline
+      if (filter === 'totPackets') {
+        query.aggregations.dbHisto.aggregations.srcPackets = { sum: { field: 'srcPackets' } };
+        query.aggregations.dbHisto.aggregations.dstPackets = { sum: { field: 'dstPackets' } };
+      } else if (filter === 'totBytes') {
+        query.aggregations.dbHisto.aggregations.srcBytes = { sum: { field: 'srcBytes' } };
+        query.aggregations.dbHisto.aggregations.dstBytes = { sum: { field: 'dstBytes' } };
+      } else if (filter === 'totDataBytes') {
+        query.aggregations.dbHisto.aggregations.srcDataBytes = { sum: { field: 'srcDataBytes' } };
+        query.aggregations.dbHisto.aggregations.dstDataBytes = { sum: { field: 'dstDataBytes' } };
+      } else {
+        query.aggregations.dbHisto.aggregations[filter] = { sum: { field: filter } };
+      }
+    }
+
+    switch (reqQuery.bounding) {
+    case 'first':
+      query.aggregations.dbHisto.histogram = { field: 'firstPacket', interval: interval * 1000, min_doc_count: 1 };
+      break;
+    case 'database':
+      query.aggregations.dbHisto.histogram = { field: 'timestamp', interval: interval * 1000, min_doc_count: 1 };
+      break;
+    default:
+      query.aggregations.dbHisto.histogram = { field: 'lastPacket', interval: interval * 1000, min_doc_count: 1 };
+      break;
+    }
+  }
+
+  addSortToQuery(query, reqQuery, 'firstPacket');
 
   let err = null;
 
   molochparser.parser.yy = {
     views: req.user.views,
     fieldsMap: Config.getFieldsMap(),
+    dbFieldsMap: Config.getDBFieldsMap(),
     prefix: internals.prefix,
     emailSearch: req.user.emailSearch === true,
     lookups: req.lookups,
     lookupTypeMap: internals.lookupTypeMap
   };
 
-  if (req.query.expression) {
-    //req.query.expression = req.query.expression.replace(/\\/g, "\\\\");
+  if (reqQuery.expression) {
+    // reqQuery.expression = reqQuery.expression.replace(/\\/g, "\\\\");
     try {
-      query.query.bool.filter.push(molochparser.parse(req.query.expression));
+      query.query.bool.filter.push(molochparser.parse(reqQuery.expression));
     } catch (e) {
       err = e;
     }
   }
 
-  if (!err && req.query.view) {
-    addViewToQuery(req, query, continueBuildQuery, buildCb);
+  if (!err && reqQuery.view) {
+    addViewToQuery(req, query, continueBuildQuery, buildCb, queryOverride);
   } else {
-    continueBuildQuery(req, query, err, buildCb);
+    continueBuildQuery(req, query, err, buildCb, queryOverride);
   }
 }
 
-function addViewToQuery(req, query, continueBuildQueryCb, finalCb) {
+function addViewToQuery (req, query, continueBuildQueryCb, finalCb, queryOverride = null) {
   let err;
   let viewExpression;
-  if (req.user.views && req.user.views[req.query.view]) { // it's a user's view
+
+  // queryOverride can supercede req.query if specified
+  let reqQuery = queryOverride || req.query;
+
+  if (req.user.views && req.user.views[reqQuery.view]) { // it's a user's view
     try {
-      viewExpression = molochparser.parse(req.user.views[req.query.view].expression);
+      viewExpression = molochparser.parse(req.user.views[reqQuery.view].expression);
       query.query.bool.filter.push(viewExpression);
     } catch (e) {
-      console.log(`ERROR - User expression (${req.query.view}) doesn't compile -`, e);
+      console.log(`ERROR - User expression (${reqQuery.view}) doesn't compile -`, e);
       err = e;
     }
-    continueBuildQueryCb(req, query, err, finalCb);
+    continueBuildQueryCb(req, query, err, finalCb, queryOverride);
   } else { // it's a shared view
     Db.getUser('_moloch_shared', (err, sharedUser) => {
       if (sharedUser && sharedUser.found) {
         sharedUser = sharedUser._source;
         sharedUser.views = sharedUser.views || {};
         for (let viewName in sharedUser.views) {
-          if (viewName === req.query.view) {
+          if (viewName === reqQuery.view) {
             viewExpression = sharedUser.views[viewName].expression;
             break;
           }
         }
-        if (sharedUser.views[req.query.view]) {
+        if (sharedUser.views[reqQuery.view]) {
           try {
-            viewExpression = molochparser.parse(sharedUser.views[req.query.view].expression);
+            viewExpression = molochparser.parse(sharedUser.views[reqQuery.view].expression);
             query.query.bool.filter.push(viewExpression);
           } catch (e) {
-            console.log(`ERROR - Shared user expression (${req.query.view}) doesn't compile -`, e);
+            console.log(`ERROR - Shared user expression (${reqQuery.view}) doesn't compile -`, e);
             err = e;
           }
         }
-        continueBuildQueryCb(req, query, err, finalCb);
+        continueBuildQueryCb(req, query, err, finalCb, queryOverride);
       }
     });
   }
 }
 
-function continueBuildQuery(req, query, err, finalCb) {
+function continueBuildQuery (req, query, err, finalCb, queryOverride = null) {
+  // queryOverride can supercede req.query if specified
+  let reqQuery = queryOverride || req.query;
+
   if (!err && req.user.expression && req.user.expression.length > 0) {
     try {
       // Expression was set by admin, so assume email search ok
@@ -3070,30 +3116,29 @@ function continueBuildQuery(req, query, err, finalCb) {
   }
 
   lookupQueryItems(query.query.bool.filter, function (lerr) {
-    if (req.query.date === '-1' ||                                      // An all query
-        (req.query.bounding || "last") !== "last" ||                    // Not a last bounded query
-        Config.get("queryAllIndices", Config.get("multiES", false))) {  // queryAllIndices (default: multiES)
-      return finalCb(err || lerr, query, "sessions2-*"); // Then we just go against all indices for a slight overhead
+    if (reqQuery.date === '-1' || // An all query
+        Config.get('queryAllIndices', Config.get('multiES', false))) { // queryAllIndices (default: multiES)
+      return finalCb(err || lerr, query, 'sessions2-*'); // Then we just go against all indices for a slight overhead
     }
 
-    Db.getIndices(req.query.startTime, req.query.stopTime, Config.get("rotateIndex", "daily"), function(indices) {
+    Db.getIndices(reqQuery.startTime, reqQuery.stopTime, reqQuery.bounding, Config.get('rotateIndex', 'daily'), function (indices) {
       if (indices.length > 3000) { // Will url be too long
-        return finalCb(err || lerr, query, "sessions2-*");
+        return finalCb(err || lerr, query, 'sessions2-*');
       } else {
         return finalCb(err || lerr, query, indices);
       }
     });
   });
 }
-//////////////////////////////////////////////////////////////////////////////////
-//// Sessions List
-//////////////////////////////////////////////////////////////////////////////////
-function sessionsListAddSegments(req, indices, query, list, cb) {
+// ----------------------------------------------------------------------------
+// Sessions List
+// ----------------------------------------------------------------------------
+function sessionsListAddSegments (req, indices, query, list, cb) {
   var processedRo = {};
 
   // Index all the ids we have, so we don't include them again
   var haveIds = {};
-  list.forEach(function(item) {
+  list.forEach(function (item) {
     haveIds[item._id] = true;
   });
 
@@ -3101,7 +3146,7 @@ function sessionsListAddSegments(req, indices, query, list, cb) {
 
   // Do a ro search on each item
   var writes = 0;
-  async.eachLimit(list, 10, function(item, nextCb) {
+  async.eachLimit(list, 10, function (item, nextCb) {
     var fields = item._source || item.fields;
     if (!fields.rootId || processedRo[fields.rootId]) {
       if (writes++ > 100) {
@@ -3114,13 +3159,13 @@ function sessionsListAddSegments(req, indices, query, list, cb) {
     }
     processedRo[fields.rootId] = true;
 
-    query.query.bool.filter.push({term: {rootId: fields.rootId}});
+    query.query.bool.filter.push({ term: { rootId: fields.rootId } });
     Db.searchPrimary(indices, 'session', query, null, function (err, result) {
       if (err || result === undefined || result.hits === undefined || result.hits.hits === undefined) {
-        console.log("ERROR fetching matching sessions", err, result);
+        console.log('ERROR fetching matching sessions', err, result);
         return nextCb(null);
       }
-      result.hits.hits.forEach(function(item) {
+      result.hits.hits.forEach(function (item) {
         if (!haveIds[item._id]) {
           haveIds[item._id] = true;
           list.push(item);
@@ -3129,33 +3174,32 @@ function sessionsListAddSegments(req, indices, query, list, cb) {
       return nextCb(null);
     });
     query.query.bool.filter.pop();
-
   }, function (err) {
     cb(err, list);
   });
 }
 
-function sessionsListFromQuery(req, res, fields, cb) {
-  if (req.query.segments && req.query.segments.match(/^(time|all)$/) && fields.indexOf("rootId") === -1) {
-    fields.push("rootId");
+function sessionsListFromQuery (req, res, fields, cb) {
+  if (req.query.segments && req.query.segments.match(/^(time|all)$/) && fields.indexOf('rootId') === -1) {
+    fields.push('rootId');
   }
 
-  buildSessionQuery(req, function(err, query, indices) {
+  buildSessionQuery(req, function (err, query, indices) {
     if (err) {
-      return res.send("Could not build query.  Err: " + err);
+      return res.send('Could not build query.  Err: ' + err);
     }
     query._source = fields;
     if (Config.debug) {
-      console.log("sessionsListFromQuery query", JSON.stringify(query, null, 1));
+      console.log('sessionsListFromQuery query', JSON.stringify(query, null, 1));
     }
     Db.searchPrimary(indices, 'session', query, null, function (err, result) {
       if (err || result.error) {
-          console.log("ERROR - Could not fetch list of sessions.  Err: ", err,  " Result: ", result, "query:", query);
-          return res.send("Could not fetch list of sessions.  Err: " + err + " Result: " + result);
+        console.log('ERROR - Could not fetch list of sessions.  Err: ', err, ' Result: ', result, 'query:', query);
+        return res.send('Could not fetch list of sessions.  Err: ' + err + ' Result: ' + result);
       }
       var list = result.hits.hits;
       if (req.query.segments && req.query.segments.match(/^(time|all)$/)) {
-        sessionsListAddSegments(req, indices, query, list, function(err, list) {
+        sessionsListAddSegments(req, indices, query, list, function (err, list) {
           cb(err, list);
         });
       } else {
@@ -3165,19 +3209,19 @@ function sessionsListFromQuery(req, res, fields, cb) {
   });
 }
 
-function sessionsListFromIds(req, ids, fields, cb) {
+function sessionsListFromIds (req, ids, fields, cb) {
   var processSegments = false;
   if (req && ((req.query.segments && req.query.segments.match(/^(time|all)$/)) || (req.body.segments && req.body.segments.match(/^(time|all)$/)))) {
-    if (fields.indexOf("rootId") === -1) { fields.push("rootId"); }
+    if (fields.indexOf('rootId') === -1) { fields.push('rootId'); }
     processSegments = true;
   }
 
   let list = [];
-  let nonArrayFields = ["ipProtocol", "firstPacket", "lastPacket", "srcIp", "srcPort", "srcGEO", "dstIp", "dstPort", "dstGEO", "totBytes", "totDataBytes", "totPackets", "node", "rootId", "http.xffGEO"];
-  let fixFields = nonArrayFields.filter(function(x) {return fields.indexOf(x) !== -1;});
+  let nonArrayFields = ['ipProtocol', 'firstPacket', 'lastPacket', 'srcIp', 'srcPort', 'srcGEO', 'dstIp', 'dstPort', 'dstGEO', 'totBytes', 'totDataBytes', 'totPackets', 'node', 'rootId', 'http.xffGEO'];
+  let fixFields = nonArrayFields.filter(function (x) { return fields.indexOf(x) !== -1; });
 
-  async.eachLimit(ids, 10, function(id, nextCb) {
-    Db.getWithOptions(Db.sid2Index(id), 'session', Db.sid2Id(id), {_source: fields.join(",")}, function(err, session) {
+  async.eachLimit(ids, 10, function (id, nextCb) {
+    Db.getWithOptions(Db.sid2Index(id), 'session', Db.sid2Id(id), { _source: fields.join(',') }, function (err, session) {
       if (err) {
         return nextCb(null);
       }
@@ -3192,11 +3236,11 @@ function sessionsListFromIds(req, ids, fields, cb) {
       list.push(session);
       nextCb(null);
     });
-  }, function(err) {
+  }, function (err) {
     if (processSegments) {
-      buildSessionQuery(req, function(err, query, indices) {
+      buildSessionQuery(req, function (err, query, indices) {
         query._source = fields;
-        sessionsListAddSegments(req, indices, query, list, function(err, list) {
+        sessionsListAddSegments(req, indices, query, list, function (err, list) {
           cb(err, list);
         });
       });
@@ -3206,9 +3250,9 @@ function sessionsListFromIds(req, ids, fields, cb) {
   });
 }
 
-//////////////////////////////////////////////////////////////////////////////////
-//// APIs
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// APIs
+// ----------------------------------------------------------------------------
 app.get('/history/list', [noCacheJson, recordResponseTime, setCookie], (req, res) => {
   let userId;
   if (req.user.createEnabled) { // user is an admin, they can view all logs
@@ -3221,11 +3265,11 @@ app.get('/history/list', [noCacheJson, recordResponseTime, setCookie], (req, res
 
   let query = {
     sort: {},
-    from: +req.query.start  || 0,
+    from: +req.query.start || 0,
     size: +req.query.length || 1000
   };
 
-  query.sort[req.query.sortField || 'timestamp'] = { order: req.query.desc === 'true' ? 'desc': 'asc'};
+  query.sort[req.query.sortField || 'timestamp'] = { order: req.query.desc === 'true' ? 'desc' : 'asc' };
 
   if (req.query.searchTerm || userId) {
     query.query = { bool: { must: [] } };
@@ -3233,8 +3277,8 @@ app.get('/history/list', [noCacheJson, recordResponseTime, setCookie], (req, res
     if (req.query.searchTerm) { // apply search term
       query.query.bool.must.push({
         query_string: {
-          query : req.query.searchTerm,
-          fields: ['expression','userId','api','view.name','view.expression']
+          query: req.query.searchTerm,
+          fields: ['expression', 'userId', 'api', 'view.name', 'view.expression']
         }
       });
     }
@@ -3258,21 +3302,21 @@ app.get('/history/list', [noCacheJson, recordResponseTime, setCookie], (req, res
     let existsArr = req.query.exists.split(',');
     for (let i = 0, len = existsArr.length; i < len; ++i) {
       query.query.bool.must.push({
-        exists: { field:existsArr[i] }
+        exists: { field: existsArr[i] }
       });
     }
   }
 
   // filter history table by a time range
   if (req.query.startTime && req.query.stopTime) {
-    if (! /^[0-9]+$/.test(req.query.startTime)) {
-      req.query.startTime = Date.parse(req.query.startTime.replace("+", " "))/1000;
+    if (!/^[0-9]+$/.test(req.query.startTime)) {
+      req.query.startTime = Date.parse(req.query.startTime.replace('+', ' ')) / 1000;
     } else {
       req.query.startTime = parseInt(req.query.startTime, 10);
     }
 
-    if (! /^[0-9]+$/.test(req.query.stopTime)) {
-      req.query.stopTime = Date.parse(req.query.stopTime.replace("+", " "))/1000;
+    if (!/^[0-9]+$/.test(req.query.stopTime)) {
+      req.query.stopTime = Date.parse(req.query.stopTime.replace('+', ' ')) / 1000;
     } else {
       req.query.stopTime = parseInt(req.query.stopTime, 10);
     }
@@ -3287,50 +3331,49 @@ app.get('/history/list', [noCacheJson, recordResponseTime, setCookie], (req, res
   }
 
   Promise.all([Db.searchHistory(query),
-               Db.numberOfLogs()
-              ])
-  .then(([logs, total]) => {
-    if (logs.error) { throw logs.error; }
+    Db.numberOfLogs()
+  ])
+    .then(([logs, total]) => {
+      if (logs.error) { throw logs.error; }
 
-    let results = { total:logs.hits.total, results:[] };
-    for (let i = 0, ilen = logs.hits.hits.length; i < ilen; i++) {
-      let hit = logs.hits.hits[i];
-      let log = hit._source;
-      log.id = hit._id;
-      log.index = hit._index;
-      if (!req.user.createEnabled) {
+      let results = { total: logs.hits.total, results: [] };
+      for (let i = 0, ilen = logs.hits.hits.length; i < ilen; i++) {
+        let hit = logs.hits.hits[i];
+        let log = hit._source;
+        log.id = hit._id;
+        log.index = hit._index;
+        if (!req.user.createEnabled) {
         // remove forced expression for reqs made by nonadmin users
-        log.forcedExpression = undefined;
+          log.forcedExpression = undefined;
+        }
+        results.results.push(log);
       }
-      results.results.push(log);
-    }
-    let r = {
-      recordsTotal: total.count,
-      recordsFiltered: results.total,
-      data: results.results
-    };
-    res.send(r);
-  }).catch(err => {
-    console.log('ERROR - /history/logs', err);
-    return res.molochError(500, 'Error retrieving log history - ' + err);
-  });
+      let r = {
+        recordsTotal: total.count,
+        recordsFiltered: results.total,
+        data: results.results
+      };
+      res.send(r);
+    }).catch(err => {
+      console.log('ERROR - /history/logs', err);
+      return res.molochError(500, 'Error retrieving log history - ' + err);
+    });
 });
 
 app.delete('/history/list/:id', [noCacheJson, checkCookieToken, checkPermissions(['createEnabled', 'removeEnabled'])], (req, res) => {
   if (!req.query.index) { return res.molochError(403, 'Missing history index'); }
 
-  Db.deleteHistoryItem(req.params.id, req.query.index, function(err, result) {
+  Db.deleteHistoryItem(req.params.id, req.query.index, function (err, result) {
     if (err || result.error) {
       console.log('ERROR - deleting history item', err || result.error);
       return res.molochError(500, 'Error deleting history item');
     } else {
-      res.send(JSON.stringify({success: true, text: 'Deleted history item successfully'}));
+      res.send(JSON.stringify({ success: true, text: 'Deleted history item successfully' }));
     }
   });
 });
 
-
-app.get('/fields', function(req, res) {
+app.get('/fields', function (req, res) {
   if (!app.locals.fieldsMap) {
     res.status(404);
     res.send('Cannot locate fields');
@@ -3344,60 +3387,66 @@ app.get('/fields', function(req, res) {
 });
 
 app.get('/file/list', [noCacheJson, recordResponseTime, logAction('files'), checkPermissions(['hideFiles']), setCookie], (req, res) => {
-  var columns = ["num", "node", "name", "locked", "first", "filesize"];
+  const columns = ['num', 'node', 'name', 'locked', 'first', 'filesize', 'encoding'];
 
-  var query = {_source: columns,
-               from: +req.query.start || 0,
-               size: +req.query.length || 10,
-               sort: {}
-              };
+  let query = {
+    _source: columns,
+    from: +req.query.start || 0,
+    size: +req.query.length || 10,
+    sort: {}
+  };
 
-  query.sort[req.query.sortField || "num"] = { order: req.query.desc === "true" ? "desc": "asc"};
+  query.sort[req.query.sortField || 'num'] = {
+    order: req.query.desc === 'true' ? 'desc' : 'asc'
+  };
 
   if (req.query.filter) {
-    query.query = {wildcard: {name: "*" + req.query.filter + "*"}};
+    query.query = { wildcard: { name: `*${req.query.filter}*` } };
   }
 
-  Promise.all([Db.search('files', 'file', query),
-               Db.numberOfDocuments('files')
-              ])
-  .then(([files, total]) => {
-    if (files.error) {throw files.error;}
+  Promise.all([
+    Db.search('files', 'file', query),
+    Db.numberOfDocuments('files')
+  ])
+    .then(([files, total]) => {
+      if (files.error) { throw files.error; }
 
-    var results = {total: files.hits.total, results: []};
-    for (let i = 0, ilen = files.hits.hits.length; i < ilen; i++) {
-      var fields = files.hits.hits[i]._source || files.hits.hits[i].fields;
-      if (fields.locked === undefined) {
-        fields.locked = 0;
+      let results = { total: files.hits.total, results: [] };
+      for (let i = 0, ilen = files.hits.hits.length; i < ilen; i++) {
+        let fields = files.hits.hits[i]._source || files.hits.hits[i].fields;
+        if (fields.locked === undefined) {
+          fields.locked = 0;
+        }
+        fields.id = files.hits.hits[i]._id;
+        results.results.push(fields);
       }
-      fields.id = files.hits.hits[i]._id;
-      results.results.push(fields);
-    }
 
-    var r = {recordsTotal: total.count,
-             recordsFiltered: results.total,
-             data: results.results};
-    res.logCounts(r.data.length, r.recordsFiltered, r.total);
-    res.send(r);
+      const r = {
+        recordsTotal: total.count,
+        recordsFiltered: results.total,
+        data: results.results
+      };
 
-  }).catch((err) => {
-    console.log("ERROR - /file/list", err);
-    return res.send({recordsTotal: 0, recordsFiltered: 0, data: []});
-  });
+      res.logCounts(r.data.length, r.recordsFiltered, r.total);
+      res.send(r);
+    }).catch((err) => {
+      console.log('ERROR - /file/list', err);
+      return res.send({ recordsTotal: 0, recordsFiltered: 0, data: [] });
+    });
 });
 
 app.get('/titleconfig', checkPermissions(['webEnabled']), (req, res) => {
   var titleConfig = Config.get('titleTemplate', '_cluster_ - _page_ _-view_ _-expression_');
 
   titleConfig = titleConfig.replace(/_cluster_/g, internals.clusterName)
-    .replace(/_userId_/g, req.user?req.user.userId:"-")
-    .replace(/_userName_/g, req.user?req.user.userName:"-");
+    .replace(/_userId_/g, req.user ? req.user.userId : '-')
+    .replace(/_userName_/g, req.user ? req.user.userName : '-');
 
   res.send(titleConfig);
 });
 
 app.get('/molochRightClick', [noCacheJson, checkPermissions(['webEnabled'])], (req, res) => {
-  if(!app.locals.molochRightClick) {
+  if (!app.locals.molochRightClick) {
     res.status(404);
     res.send('Cannot locate right clicks');
   }
@@ -3406,7 +3455,7 @@ app.get('/molochRightClick', [noCacheJson, checkPermissions(['webEnabled'])], (r
 
 // No auth necessary for eshealth.json
 app.get('/eshealth.json', [noCacheJson], (req, res) => {
-  Db.healthCache(function(err, health) {
+  Db.healthCache(function (err, health) {
     res.send(health);
   });
 });
@@ -3417,7 +3466,7 @@ app.get('/esindices/list', [noCacheJson, recordResponseTime, checkPermissions(['
     indicesSettings: Db.indicesSettingsCache
   }, function (err, results) {
     if (err) {
-      console.log ('ERROR -  /esindices/list', err);
+      console.log('ERROR -  /esindices/list', err);
       return res.send({
         recordsTotal: 0,
         recordsFiltered: 0,
@@ -3471,9 +3520,9 @@ app.get('/esindices/list', [noCacheJson, recordResponseTime, checkPermissions(['
       }
     } else {
       if (req.query.desc === 'true') {
-        findices = findices.sort(function (a,b) { return b[sortField] - a[sortField]; });
+        findices = findices.sort(function (a, b) { return b[sortField] - a[sortField]; });
       } else {
-        findices = findices.sort(function (a,b) { return a[sortField] - b[sortField]; });
+        findices = findices.sort(function (a, b) { return a[sortField] - b[sortField]; });
       }
     }
 
@@ -3494,7 +3543,7 @@ app.delete('/esindices/:index', [noCacheJson, logAction(), checkCookieToken, che
   Db.deleteIndex([req.params.index], {}, (err, result) => {
     if (err) {
       res.status(404);
-      return res.send(JSON.stringify({ success:false, text:'Error deleting index' }));
+      return res.send(JSON.stringify({ success: false, text: 'Error deleting index' }));
     }
     return res.send(JSON.stringify({ success: true, text: result }));
   });
@@ -3507,7 +3556,7 @@ app.post('/esindices/:index/optimize', [noCacheJson, logAction(), checkCookieTok
 
   Db.optimizeIndex([req.params.index], {}, (err, result) => {
     if (err) {
-      console.log ("ERROR -", req.params.index, "optimize failed", err);
+      console.log('ERROR -', req.params.index, 'optimize failed', err);
     }
   });
 
@@ -3523,7 +3572,7 @@ app.post('/esindices/:index/close', [noCacheJson, logAction(), checkCookieToken,
   Db.closeIndex([req.params.index], {}, (err, result) => {
     if (err) {
       res.status(404);
-      return res.send(JSON.stringify({ success:false, text:'Error closing index' }));
+      return res.send(JSON.stringify({ success: false, text: 'Error closing index' }));
     }
     return res.send(JSON.stringify({ success: true, text: result }));
   });
@@ -3536,7 +3585,7 @@ app.post('/esindices/:index/open', [noCacheJson, logAction(), checkCookieToken, 
 
   Db.openIndex([req.params.index], {}, (err, result) => {
     if (err) {
-      console.log ("ERROR -", req.params.index, "open failed", err);
+      console.log('ERROR -', req.params.index, 'open failed', err);
     }
   });
 
@@ -3611,7 +3660,7 @@ app.post('/esindices/:index/shrink', [noCacheJson, logAction(), checkCookieToken
 app.get('/estask/list', [noCacheJson, recordResponseTime, checkPermissions(['hideStats']), setCookie], (req, res) => {
   Db.tasks(function (err, tasks) {
     if (err) {
-      console.log ('ERROR -  /estask/list', err);
+      console.log('ERROR -  /estask/list', err);
       return res.send({
         recordsTotal: 0,
         recordsFiltered: 0,
@@ -3648,7 +3697,7 @@ app.get('/estask/list', [noCacheJson, recordResponseTime, checkPermissions(['hid
 
       if (task.headers['X-Opaque-Id']) {
         let parts = splitRemain(task.headers['X-Opaque-Id'], '::', 1);
-        task.user = (parts.length === 1?'':parts[0]);
+        task.user = (parts.length === 1 ? '' : parts[0]);
       } else {
         task.user = '';
       }
@@ -3696,7 +3745,8 @@ app.post('/estask/cancel', [noCacheJson, logAction(), checkCookieToken, checkPer
   });
 });
 
-app.post('/estask/cancelById', [noCacheJson, logAction(), checkCookieToken, checkPermissions(['createEnabled'])], (req, res) => {
+// Should not have createEnabled check so that users can use, each user is named spaced below
+app.post('/estask/cancelById', [noCacheJson, logAction(), checkCookieToken], (req, res) => {
   if (!req.body || !req.body.cancelId) {
     return res.molochError(403, 'Missing cancel ID');
   }
@@ -3712,123 +3762,127 @@ app.post('/estask/cancelAll', [noCacheJson, logAction(), checkCookieToken, check
   });
 });
 
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
 function checkEsAdminUser (req, res, next) {
-  if (internals.esAdminUsers.includes(req.user.userId)) {
-    return next();
+  if (internals.esAdminUsersSet) {
+    if (internals.esAdminUsers.includes(req.user.userId)) {
+      return next();
+    }
+  } else {
+    if (req.user.createEnabled && Config.get('multiES', false) === false) {
+      return next();
+    }
   }
   return res.molochError(403, 'You do not have permission to access this resource');
 }
 
 app.get('/esadmin/list', [noCacheJson, recordResponseTime, checkEsAdminUser, setCookie], (req, res) => {
-  Promise.all([Db.getClusterSettings({flatSettings: true, include_defaults: true})
-              ]).then(([settings]) => {
+  Promise.all([Db.getClusterSettings({ flatSettings: true, include_defaults: true })
+  ]).then(([settings]) => {
     let rsettings = [];
 
-    function addSetting(key, type, name, url, regex) {
+    function addSetting (key, type, name, url, regex) {
       let current = settings.transient[key];
       if (current === undefined) { current = settings.persistent[key]; }
       if (current === undefined) { current = settings.defaults[key]; }
       if (current === undefined) { return; }
-      rsettings.push({key: key, current: current, name: name, type: type, url: url, regex: regex});
+      rsettings.push({ key: key, current: current, name: name, type: type, url: url, regex: regex });
     }
 
     addSetting('search.max_buckets', 'Integer',
-               'Max Aggregation Size',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/search-aggregations-bucket.html',
-               '^(|null|\\d+)$');
+      'Max Aggregation Size',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/search-aggregations-bucket.html',
+      '^(|null|\\d+)$');
 
     addSetting('cluster.routing.allocation.disk.watermark.flood_stage', 'Percent or Byte Value',
-               'Disk Watermark Flood',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/disk-allocator.html',
-               '^(|null|\\d+(%|b|kb|mb|gb|tb|pb))$');
+      'Disk Watermark Flood',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/disk-allocator.html',
+      '^(|null|\\d+(%|b|kb|mb|gb|tb|pb))$');
 
     addSetting('cluster.routing.allocation.disk.watermark.high', 'Percent or Byte Value',
-               'Disk Watermark High',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/disk-allocator.html',
-               '^(|null|\\d+(%|b|kb|mb|gb|tb|pb))$');
+      'Disk Watermark High',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/disk-allocator.html',
+      '^(|null|\\d+(%|b|kb|mb|gb|tb|pb))$');
 
     addSetting('cluster.routing.allocation.disk.watermark.low', 'Percent or Byte Value',
-               'Disk Watermark Low',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/disk-allocator.html',
-               '^(|null|\\d+(%|b|kb|mb|gb|tb|pb))$');
+      'Disk Watermark Low',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/disk-allocator.html',
+      '^(|null|\\d+(%|b|kb|mb|gb|tb|pb))$');
 
     addSetting('cluster.routing.allocation.enable', 'Mode',
-               'Allocation Mode',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/shards-allocation.html',
-               '^(all|primaries|new_primaries|none)$');
+      'Allocation Mode',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/shards-allocation.html',
+      '^(all|primaries|new_primaries|none)$');
 
     addSetting('cluster.routing.allocation.cluster_concurrent_rebalance', 'Integer',
-               'Concurrent Rebalances',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/shards-allocation.html',
-               '^(|null|\\d+)$');
+      'Concurrent Rebalances',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/shards-allocation.html',
+      '^(|null|\\d+)$');
 
     addSetting('cluster.routing.allocation.node_concurrent_recoveries', 'Integer',
-               'Concurrent Recoveries',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/shards-allocation.html',
-               '^(|null|\\d+)$');
+      'Concurrent Recoveries',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/shards-allocation.html',
+      '^(|null|\\d+)$');
 
     addSetting('cluster.routing.allocation.node_initial_primaries_recoveries', 'Integer',
-               'Initial Primaries Recoveries',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/shards-allocation.html',
-               '^(|null|\\d+)$');
+      'Initial Primaries Recoveries',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/shards-allocation.html',
+      '^(|null|\\d+)$');
 
     addSetting('cluster.max_shards_per_node', 'Integer',
-               'Max Shards per Node',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/master/misc-cluster.html',
-               '^(|null|\\d+)$');
+      'Max Shards per Node',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/master/misc-cluster.html',
+      '^(|null|\\d+)$');
 
     addSetting('indices.recovery.max_bytes_per_sec', 'Byte Value',
-               'Recovery Max Bytes per Second',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/recovery.html',
-               '^(|null|\\d+(b|kb|mb|gb|tb|pb))$');
+      'Recovery Max Bytes per Second',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/recovery.html',
+      '^(|null|\\d+(b|kb|mb|gb|tb|pb))$');
 
     addSetting('cluster.routing.allocation.awareness.attributes', 'List of Attributes',
-               'Shard Allocation Awareness',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/allocation-awareness.html',
-               '^(|null|[a-z0-9_,-]+)$');
+      'Shard Allocation Awareness',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/allocation-awareness.html',
+      '^(|null|[a-z0-9_,-]+)$');
 
     addSetting('indices.breaker.total.limit', 'Percent',
-               'Breaker - Total Limit',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/circuit-breaker.html',
-               '^(|null|\\d+%)$');
+      'Breaker - Total Limit',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/circuit-breaker.html',
+      '^(|null|\\d+%)$');
 
     addSetting('indices.breaker.fielddata.limit', 'Percent',
-               'Breaker - Field data',
-               'https://www.elastic.co/guide/en/elasticsearch/reference/current/circuit-breaker.html',
-               '^(|null|\\d+%)$');
-
+      'Breaker - Field data',
+      'https://www.elastic.co/guide/en/elasticsearch/reference/current/circuit-breaker.html',
+      '^(|null|\\d+%)$');
 
     return res.send(rsettings);
   });
 });
 
 app.post('/esadmin/set', [noCacheJson, recordResponseTime, checkEsAdminUser, checkCookieToken], (req, res) => {
-
   if (req.body.key === undefined) { return res.molochError(500, 'Missing key'); }
   if (req.body.value === undefined) { return res.molochError(500, 'Missing value'); }
 
   // Convert null string to null
   if (req.body.value === 'null') { req.body.value = null; }
 
-  let query = {body: {persistent: {}}};
+  let query = { body: { persistent: {} } };
   query.body.persistent[req.body.key] = req.body.value || null;
 
-  Db.putClusterSettings(query, function(err, result) {
+  Db.putClusterSettings(query, function (err, result) {
     if (err) {
-      console.log("putSettings failed", result);
+      console.log('putSettings failed', result);
       return res.molochError(500, 'Set failed');
     }
-    return res.send(JSON.stringify({ success: true, text: 'Set'}));
+    return res.send(JSON.stringify({ success: true, text: 'Set' }));
   });
 });
 
 app.post('/esadmin/reroute', [noCacheJson, recordResponseTime, checkEsAdminUser, checkCookieToken], (req, res) => {
   Db.reroute((err) => {
     if (err) {
-      return res.send(JSON.stringify({ success: true, text: 'Reroute failed'}));
+      return res.send(JSON.stringify({ success: true, text: 'Reroute failed' }));
     } else {
-      return res.send(JSON.stringify({ success: true, text: 'Reroute successful'}));
+      return res.send(JSON.stringify({ success: true, text: 'Reroute successful' }));
     }
   });
 });
@@ -3836,18 +3890,18 @@ app.post('/esadmin/reroute', [noCacheJson, recordResponseTime, checkEsAdminUser,
 app.post('/esadmin/flush', [noCacheJson, recordResponseTime, checkEsAdminUser, checkCookieToken], (req, res) => {
   Db.refresh('*');
   Db.flush('*');
-  return res.send(JSON.stringify({ success: true, text: 'Flushed'}));
+  return res.send(JSON.stringify({ success: true, text: 'Flushed' }));
 });
 
 app.post('/esadmin/unflood', [noCacheJson, recordResponseTime, checkEsAdminUser, checkCookieToken], (req, res) => {
-  Db.setIndexSettings('*', {'index.blocks.read_only_allow_delete': null});
-  return res.send(JSON.stringify({ success: true, text: 'Unflood'}));
+  Db.setIndexSettings('*', { body: { 'index.blocks.read_only_allow_delete': null } });
+  return res.send(JSON.stringify({ success: true, text: 'Unflood' }));
 });
 
 app.get('/esshard/list', [noCacheJson, recordResponseTime, checkPermissions(['hideStats']), setCookie], (req, res) => {
   Promise.all([
     Db.shards(),
-    Db.getClusterSettings({flatSettings: true})
+    Db.getClusterSettings({ flatSettings: true })
   ]).then(([shards, settings]) => {
     let ipExcludes = [];
     if (settings.persistent['cluster.routing.allocation.exclude._ip']) {
@@ -3872,10 +3926,10 @@ app.get('/esshard/list', [noCacheJson, recordResponseTime, checkPermissions(['hi
     let nodes = {};
 
     for (var shard of shards) {
-      if (shard.node === null || shard.node === "null") { shard.node = "Unassigned"; }
+      if (shard.node === null || shard.node === 'null') { shard.node = 'Unassigned'; }
 
-      if (! (req.query.show === 'all' ||
-            shard.state === req.query.show ||    //  Show only matching stage
+      if (!(req.query.show === 'all' ||
+            shard.state === req.query.show || //  Show only matching stage
             (shard.state !== 'STARTED' && req.query.show === 'notstarted'))) {
         continue;
       }
@@ -3883,13 +3937,13 @@ app.get('/esshard/list', [noCacheJson, recordResponseTime, checkPermissions(['hi
       if (regex && !shard.index.toLowerCase().match(regex) && !shard.node.toLowerCase().match(regex)) { continue; }
 
       if (result[shard.index] === undefined) {
-        result[shard.index] = {name: shard.index, nodes: {}};
+        result[shard.index] = { name: shard.index, nodes: {} };
       }
       if (result[shard.index].nodes[shard.node] === undefined) {
         result[shard.index].nodes[shard.node] = [];
       }
       result[shard.index].nodes[shard.node].push(shard);
-      nodes[shard.node] = {ip: shard.ip, ipExcluded: ipExcludes.includes(shard.ip), nodeExcluded: nodeExcludes.includes(shard.node)};
+      nodes[shard.node] = { ip: shard.ip, ipExcluded: ipExcludes.includes(shard.ip), nodeExcluded: nodeExcludes.includes(shard.node) };
 
       result[shard.index].nodes[shard.node]
         .sort((a, b) => {
@@ -3910,14 +3964,14 @@ app.get('/esshard/list', [noCacheJson, recordResponseTime, checkPermissions(['hi
         return a.name.localeCompare(b.name);
       });
     }
-    res.send({nodes: nodes, indices: indices, nodeExcludes: nodeExcludes, ipExcludes: ipExcludes});
+    res.send({ nodes: nodes, indices: indices, nodeExcludes: nodeExcludes, ipExcludes: ipExcludes });
   });
 });
 
 app.post('/esshard/exclude/:type/:value', [noCacheJson, logAction(), checkCookieToken, checkPermissions(['createEnabled'])], (req, res) => {
-  if (Config.get("multiES", false)) { return res.molochError(401, "Not supported in multies"); }
+  if (Config.get('multiES', false)) { return res.molochError(401, 'Not supported in multies'); }
 
-  Db.getClusterSettings({flatSettings: true}, function(err, settings) {
+  Db.getClusterSettings({ flatSettings: true }, function (err, settings) {
     let exclude = [];
     let settingName;
 
@@ -3936,20 +3990,20 @@ app.post('/esshard/exclude/:type/:value', [noCacheJson, logAction(), checkCookie
     if (!exclude.includes(req.params.value)) {
       exclude.push(req.params.value);
     }
-    var query = {body: {persistent: {}}};
+    var query = { body: { persistent: {} } };
     query.body.persistent[settingName] = exclude.join(',');
 
-    Db.putClusterSettings(query, function(err, settings) {
-      if (err) {console.log("putSettings", err);}
-      return res.send(JSON.stringify({ success: true, text: 'Excluded'}));
+    Db.putClusterSettings(query, function (err, settings) {
+      if (err) { console.log('putSettings', err); }
+      return res.send(JSON.stringify({ success: true, text: 'Excluded' }));
     });
   });
 });
 
 app.post('/esshard/include/:type/:value', [noCacheJson, logAction(), checkCookieToken, checkPermissions(['createEnabled'])], (req, res) => {
-  if (Config.get("multiES", false)) { return res.molochError(401, "Not supported in multies"); }
+  if (Config.get('multiES', false)) { return res.molochError(401, 'Not supported in multies'); }
 
-  Db.getClusterSettings({flatSettings: true}, function(err, settings) {
+  Db.getClusterSettings({ flatSettings: true }, function (err, settings) {
     let exclude = [];
     let settingName;
 
@@ -3969,12 +4023,12 @@ app.post('/esshard/include/:type/:value', [noCacheJson, logAction(), checkCookie
     if (pos > -1) {
       exclude.splice(pos, 1);
     }
-    var query = {body: {persistent: {}}};
+    var query = { body: { persistent: {} } };
     query.body.persistent[settingName] = exclude.join(',');
 
-    Db.putClusterSettings(query, function(err, settings) {
-      if (err) {console.log("putSettings", err);}
-      return res.send(JSON.stringify({ success: true, text: 'Included'}));
+    Db.putClusterSettings(query, function (err, settings) {
+      if (err) { console.log('putSettings', err); }
+      return res.send(JSON.stringify({ success: true, text: 'Included' }));
     });
   });
 });
@@ -3982,7 +4036,7 @@ app.post('/esshard/include/:type/:value', [noCacheJson, logAction(), checkCookie
 app.get('/esrecovery/list', [noCacheJson, recordResponseTime, checkPermissions(['hideStats']), setCookie], (req, res) => {
   const sortField = (req.query.sortField || 'index') + (req.query.desc === 'true' ? ':desc' : '');
 
-  Promise.all([Db.recovery(sortField)]).then(([recoveries]) => {
+  Promise.all([Db.recovery(sortField, req.query.show !== 'all')]).then(([recoveries]) => {
     let regex;
     if (req.query.filter !== undefined) {
       try {
@@ -3995,12 +4049,6 @@ app.get('/esrecovery/list', [noCacheJson, recordResponseTime, checkPermissions([
     let result = [];
 
     for (const recovery of recoveries) {
-      if (! (req.query.show === 'all' ||
-        recovery.stage === req.query.show || // Show only matching stage
-        (recovery.stage !== 'done' && req.query.show === 'notdone'))) {
-        continue;
-      }
-
       // filtering
       if (regex && !recovery.index.match(regex) &&
         !recovery.target_node.match(regex) &&
@@ -4011,13 +4059,23 @@ app.get('/esrecovery/list', [noCacheJson, recordResponseTime, checkPermissions([
       result.push(recovery);
     }
 
+    // Work around for https://github.com/elastic/elasticsearch/issues/48070
+    if (req.query.sortField && req.query.sortField.endsWith('_percent')) {
+      let sf = req.query.sortField;
+      if (req.query.desc === 'true') {
+        result = result.sort((a, b) => { return parseFloat(b[sf]) - parseFloat(a[sf]); });
+      } else {
+        result = result.sort((a, b) => { return parseFloat(a[sf]) - parseFloat(b[sf]); });
+      }
+    }
+
     res.send({
       recordsTotal: recoveries.length,
       recordsFiltered: result.length,
       data: result
     });
   }).catch((err) => {
-    console.log ('ERROR -  /esrecovery/list', err);
+    console.log('ERROR -  /esrecovery/list', err);
     return res.send({
       recordsTotal: 0,
       recordsFiltered: 0,
@@ -4031,146 +4089,148 @@ app.get('/esstats.json', [noCacheJson, recordResponseTime, checkPermissions(['hi
   let r;
 
   Promise.all([Db.nodesStatsCache(),
-               Db.nodesInfoCache(),
-               Db.masterCache(),
-               Db.healthCachePromise(),
-               Db.getClusterSettings({flatSettings: true})
-             ])
-  .then(([nodesStats, nodesInfo, master, health, settings]) => {
-
-    let ipExcludes = [];
-    if (settings.persistent['cluster.routing.allocation.exclude._ip']) {
-      ipExcludes = settings.persistent['cluster.routing.allocation.exclude._ip'].split(',');
-    }
-
-    let nodeExcludes = [];
-    if (settings.persistent['cluster.routing.allocation.exclude._name']) {
-      nodeExcludes = settings.persistent['cluster.routing.allocation.exclude._name'].split(',');
-    }
-
-    const now = new Date().getTime();
-    while (internals.previousNodesStats.length > 1 && internals.previousNodesStats[1].timestamp + 10000 < now) {
-      internals.previousNodesStats.shift();
-    }
-
-    let regex;
-    if (req.query.filter !== undefined) {
-      try {
-        regex = new RE2(req.query.filter);
-      } catch (e) {
-        return res.molochError(500, `Regex Error: ${e}`);
-      }
-    }
-
-    const nodeKeys = Object.keys(nodesStats.nodes);
-    for (let n = 0, nlen = nodeKeys.length; n < nlen; n++) {
-      let node = nodesStats.nodes[nodeKeys[n]];
-
-      if (nodeKeys[n] === 'timestamp' || (regex && !node.name.match(regex))) { continue; }
-
-      let read = 0;
-      let write = 0;
-      let rejected = 0;
-      let completed = 0;
-
-      let writeInfo = node.thread_pool.bulk || node.thread_pool.write;
-
-      const oldnode = internals.previousNodesStats[0][nodeKeys[n]];
-      if (oldnode !== undefined && node.fs.io_stats !== undefined && oldnode.fs.io_stats !== undefined && 'total' in node.fs.io_stats) {
-        const timediffsec = (node.timestamp - oldnode.timestamp)/1000.0;
-        read = Math.max(0, Math.ceil((node.fs.io_stats.total.read_kilobytes - oldnode.fs.io_stats.total.read_kilobytes)/timediffsec*1024));
-        write = Math.max(0, Math.ceil((node.fs.io_stats.total.write_kilobytes - oldnode.fs.io_stats.total.write_kilobytes)/timediffsec*1024));
-
-        let writeInfoOld = oldnode.thread_pool.bulk || oldnode.thread_pool.write;
-
-        completed = Math.max(0, Math.ceil((writeInfo.completed - writeInfoOld.completed)/timediffsec));
-        rejected = Math.max(0, Math.ceil((writeInfo.rejected - writeInfoOld.rejected)/timediffsec));
+    Db.nodesInfoCache(),
+    Db.masterCache(),
+    Db.healthCachePromise(),
+    Db.getClusterSettings({ flatSettings: true })
+  ])
+    .then(([nodesStats, nodesInfo, master, health, settings]) => {
+      let ipExcludes = [];
+      if (settings.persistent['cluster.routing.allocation.exclude._ip']) {
+        ipExcludes = settings.persistent['cluster.routing.allocation.exclude._ip'].split(',');
       }
 
-      const ip = (node.ip ? node.ip.split(':')[0] : node.host);
+      let nodeExcludes = [];
+      if (settings.persistent['cluster.routing.allocation.exclude._name']) {
+        nodeExcludes = settings.persistent['cluster.routing.allocation.exclude._name'].split(',');
+      }
 
-      let threadpoolInfo;
-      let version = "";
-      let molochtype;
-      if (nodesInfo.nodes[nodeKeys[n]]) {
-        threadpoolInfo = nodesInfo.nodes[nodeKeys[n]].thread_pool.bulk || nodesInfo.nodes[nodeKeys[n]].thread_pool.write;
-        version = nodesInfo.nodes[nodeKeys[n]].version;
-        if (nodesInfo.nodes[nodeKeys[n]].attributes) {
-          molochtype = nodesInfo.nodes[nodeKeys[n]].attributes.molochtype;
+      const now = new Date().getTime();
+      while (internals.previousNodesStats.length > 1 && internals.previousNodesStats[1].timestamp + 10000 < now) {
+        internals.previousNodesStats.shift();
+      }
+
+      let regex;
+      if (req.query.filter !== undefined) {
+        try {
+          regex = new RE2(req.query.filter);
+        } catch (e) {
+          return res.molochError(500, `Regex Error: ${e}`);
         }
-      } else {
-        threadpoolInfo = { queue_size: 0 };
       }
 
-      stats.push({
-        name: node.name,
-        ip: ip,
-        ipExcluded: ipExcludes.includes(ip),
-        nodeExcluded: nodeExcludes.includes(node.name),
-        storeSize: node.indices.store.size_in_bytes,
-        freeSize: node.roles.includes("data")?node.fs.total.available_in_bytes:0,
-        docs: node.indices.docs.count,
-        searches: node.indices.search.query_current,
-        searchesTime: node.indices.search.query_time_in_millis,
-        heapSize: node.jvm.mem.heap_used_in_bytes,
-        nonHeapSize: node.jvm.mem.non_heap_used_in_bytes,
-        cpu: node.process.cpu.percent,
-        read: read,
-        write: write,
-        writesRejected: writeInfo.rejected,
-        writesCompleted: writeInfo.completed,
-        writesRejectedDelta: rejected,
-        writesCompletedDelta: completed,
-        writesQueueSize: threadpoolInfo.queue_size,
-        load: node.os.load_average !== undefined ? /* ES 2*/ node.os.load_average : /*ES 5*/ node.os.cpu.load_average["5m"],
-        version: version,
-        molochtype: molochtype,
-        roles: node.roles,
-        isMaster: (master.length > 0 && node.name === master[0].node)
-      });
-    }
+      const nodeKeys = Object.keys(nodesStats.nodes);
+      for (let n = 0, nlen = nodeKeys.length; n < nlen; n++) {
+        let node = nodesStats.nodes[nodeKeys[n]];
 
-    if (req.query.sortField && stats.length > 1) {
-      let field = req.query.sortField === 'nodeName'?'name':req.query.sortField;
-      if (typeof(stats[0][field]) === 'string') {
-        if (req.query.desc === 'true') {
-          stats = stats.sort(function(a,b){ return b[field].localeCompare(a[field]); });
+        if (nodeKeys[n] === 'timestamp' || (regex && !node.name.match(regex))) { continue; }
+
+        let read = 0;
+        let write = 0;
+        let rejected = 0;
+        let completed = 0;
+
+        let writeInfo = node.thread_pool.bulk || node.thread_pool.write;
+
+        const oldnode = internals.previousNodesStats[0][nodeKeys[n]];
+        if (oldnode !== undefined && node.fs.io_stats !== undefined && oldnode.fs.io_stats !== undefined && 'total' in node.fs.io_stats) {
+          const timediffsec = (node.timestamp - oldnode.timestamp) / 1000.0;
+          read = Math.max(0, Math.ceil((node.fs.io_stats.total.read_kilobytes - oldnode.fs.io_stats.total.read_kilobytes) / timediffsec * 1024));
+          write = Math.max(0, Math.ceil((node.fs.io_stats.total.write_kilobytes - oldnode.fs.io_stats.total.write_kilobytes) / timediffsec * 1024));
+
+          let writeInfoOld = oldnode.thread_pool.bulk || oldnode.thread_pool.write;
+
+          completed = Math.max(0, Math.ceil((writeInfo.completed - writeInfoOld.completed) / timediffsec));
+          rejected = Math.max(0, Math.ceil((writeInfo.rejected - writeInfoOld.rejected) / timediffsec));
+        }
+
+        const ip = (node.ip ? node.ip.split(':')[0] : node.host);
+
+        let threadpoolInfo;
+        let version = '';
+        let molochtype;
+        let molochzone;
+        if (nodesInfo.nodes[nodeKeys[n]]) {
+          threadpoolInfo = nodesInfo.nodes[nodeKeys[n]].thread_pool.bulk || nodesInfo.nodes[nodeKeys[n]].thread_pool.write;
+          version = nodesInfo.nodes[nodeKeys[n]].version;
+          if (nodesInfo.nodes[nodeKeys[n]].attributes) {
+            molochtype = nodesInfo.nodes[nodeKeys[n]].attributes.molochtype;
+            molochzone = nodesInfo.nodes[nodeKeys[n]].attributes.molochzone;
+          }
         } else {
-          stats = stats.sort(function(a,b){ return a[field].localeCompare(b[field]); });
+          threadpoolInfo = { queue_size: 0 };
         }
-      } else {
-        if (req.query.desc === 'true') {
-          stats = stats.sort(function(a,b){ return b[field] - a[field]; });
+
+        stats.push({
+          name: node.name,
+          ip: ip,
+          ipExcluded: ipExcludes.includes(ip),
+          nodeExcluded: nodeExcludes.includes(node.name),
+          storeSize: node.indices.store.size_in_bytes,
+          freeSize: node.roles.includes('data') ? node.fs.total.available_in_bytes : 0,
+          docs: node.indices.docs.count,
+          searches: node.indices.search.query_current,
+          searchesTime: node.indices.search.query_time_in_millis,
+          heapSize: node.jvm.mem.heap_used_in_bytes,
+          nonHeapSize: node.jvm.mem.non_heap_used_in_bytes,
+          cpu: node.process.cpu.percent,
+          read: read,
+          write: write,
+          writesRejected: writeInfo.rejected,
+          writesCompleted: writeInfo.completed,
+          writesRejectedDelta: rejected,
+          writesCompletedDelta: completed,
+          writesQueueSize: threadpoolInfo.queue_size,
+          load: node.os.load_average !== undefined ? /* ES 2 */ node.os.load_average : /* ES 5 */ node.os.cpu.load_average['5m'],
+          version: version,
+          molochtype: molochtype,
+          molochzone: molochzone,
+          roles: node.roles,
+          isMaster: (master.length > 0 && node.name === master[0].node)
+        });
+      }
+
+      if (req.query.sortField && stats.length > 1) {
+        let field = req.query.sortField === 'nodeName' ? 'name' : req.query.sortField;
+        if (typeof (stats[0][field]) === 'string') {
+          if (req.query.desc === 'true') {
+            stats = stats.sort(function (a, b) { return b[field].localeCompare(a[field]); });
+          } else {
+            stats = stats.sort(function (a, b) { return a[field].localeCompare(b[field]); });
+          }
         } else {
-          stats = stats.sort(function(a,b){ return a[field] - b[field]; });
+          if (req.query.desc === 'true') {
+            stats = stats.sort(function (a, b) { return b[field] - a[field]; });
+          } else {
+            stats = stats.sort(function (a, b) { return a[field] - b[field]; });
+          }
         }
       }
-    }
 
-    nodesStats.nodes.timestamp = new Date().getTime();
-    internals.previousNodesStats.push(nodesStats.nodes);
+      nodesStats.nodes.timestamp = new Date().getTime();
+      internals.previousNodesStats.push(nodesStats.nodes);
 
-    r = {
-      health: health,
-      recordsTotal: nodeKeys.length,
-      recordsFiltered: stats.length,
-      data: stats
-    };
+      r = {
+        health: health,
+        recordsTotal: nodeKeys.length,
+        recordsFiltered: stats.length,
+        data: stats
+      };
 
-    res.send(r);
-  }).catch((err) => {
-    console.log ('ERROR -  /esstats.json', err);
-    r = {
-      health: Db.healthCache(),
-      recordsTotal: 0,
-      recordsFiltered: 0,
-      data: []
-    };
-    return res.send(r);
-  });
+      res.send(r);
+    }).catch((err) => {
+      console.log('ERROR -  /esstats.json', err);
+      r = {
+        health: Db.healthCache(),
+        recordsTotal: 0,
+        recordsFiltered: 0,
+        data: []
+      };
+      return res.send(r);
+    });
 });
 
-function mergeUnarray(to, from) {
+function mergeUnarray (to, from) {
   for (var key in from) {
     if (Array.isArray(from[key])) {
       to[key] = from[key][0];
@@ -4183,7 +4243,14 @@ function mergeUnarray(to, from) {
 // No auth necessary for parliament.json
 app.get('/parliament.json', [noCacheJson], (req, res) => {
   let query = {
-    size: 500,
+    size: 1000,
+    query: {
+      bool: {
+        must_not: [
+          { term: { hide: true } }
+        ]
+      }
+    },
     _source: [
       'ver', 'nodeName', 'currentTime', 'monitoring', 'deltaBytes', 'deltaPackets', 'deltaMS',
       'deltaESDropped', 'deltaDropped', 'deltaOverloadDropped'
@@ -4210,10 +4277,10 @@ app.get('/parliament.json', [noCacheJson], (req, res) => {
           fields[key] = fields[key] || 0;
         }
 
-        fields.deltaBytesPerSec         = Math.floor(fields.deltaBytes * 1000.0/fields.deltaMS);
-        fields.deltaPacketsPerSec       = Math.floor(fields.deltaPackets * 1000.0/fields.deltaMS);
-        fields.deltaESDroppedPerSec     = Math.floor(fields.deltaESDropped * 1000.0/fields.deltaMS);
-        fields.deltaTotalDroppedPerSec  = Math.floor((fields.deltaDropped + fields.deltaOverloadDropped) * 1000.0/fields.deltaMS);
+        fields.deltaBytesPerSec = Math.floor(fields.deltaBytes * 1000.0 / fields.deltaMS);
+        fields.deltaPacketsPerSec = Math.floor(fields.deltaPackets * 1000.0 / fields.deltaMS);
+        fields.deltaESDroppedPerSec = Math.floor(fields.deltaESDropped * 1000.0 / fields.deltaMS);
+        fields.deltaTotalDroppedPerSec = Math.floor((fields.deltaDropped + fields.deltaOverloadDropped) * 1000.0 / fields.deltaMS);
 
         results.results.push(fields);
       }
@@ -4257,13 +4324,13 @@ app.get('/stats.json', [noCacheJson, recordResponseTime, checkPermissions(['hide
   }
 
   let rquery = {
-    query: {term: {locked: 0}},
+    query: { term: { locked: 0 } },
     size: 0,
     aggregations: {
       buckets: {
-        terms: {field: "node", size: 1000},
+        terms: { field: 'node', size: 1000 },
         aggregations: {
-          first: {min: {field: "first"}}
+          first: { min: { field: 'first' } }
         }
       }
     }
@@ -4271,23 +4338,23 @@ app.get('/stats.json', [noCacheJson, recordResponseTime, checkPermissions(['hide
 
   if (req.query.hide !== undefined && req.query.hide !== 'none') {
     if (req.query.hide === 'old' || req.query.hide === 'both') {
-      query.query.bool.must.push({ range: { currentTime: { gte: 'now-5m'} } });
+      query.query.bool.must.push({ range: { currentTime: { gte: 'now-5m' } } });
     }
     if (req.query.hide === 'nosession' || req.query.hide === 'both') {
-      query.query.bool.must.push({ range: { monitoring: { gte: '1'} } });
+      query.query.bool.must.push({ range: { monitoring: { gte: '1' } } });
     }
   }
 
   let now = Math.floor(Date.now() / 1000);
 
   Promise.all([Db.search('stats', 'stat', query),
-               Db.numberOfDocuments('stats'),
-               Db.search('files', 'file', rquery)
+    Db.numberOfDocuments('stats'),
+    Db.search('files', 'file', rquery)
   ]).then(([stats, total, retention]) => {
     if (stats.error) { throw stats.error; }
 
     if (retention.aggregations.buckets && retention.aggregations.buckets.buckets) {
-      retention = arrayToObject(retention.aggregations.buckets.buckets, "key");
+      retention = arrayToObject(retention.aggregations.buckets.buckets, 'key');
     } else {
       retention = {};
     }
@@ -4302,30 +4369,30 @@ app.get('/stats.json', [noCacheJson, recordResponseTime, checkPermissions(['hide
       fields.id = stats.hits.hits[i]._id;
 
       if (retention[fields.id]) {
-        fields.retention                  = now - retention[fields.id].first.value;
+        fields.retention = now - retention[fields.id].first.value;
       } else {
-        fields.retention                  = 0;
+        fields.retention = 0;
       }
 
-      fields.deltaBytesPerSec           = Math.floor(fields.deltaBytes * 1000.0/fields.deltaMS);
-      fields.deltaWrittenBytesPerSec    = Math.floor(fields.deltaWrittenBytes * 1000.0/fields.deltaMS);
-      fields.deltaUnwrittenBytesPerSec  = Math.floor(fields.deltaUnwrittenBytes * 1000.0/fields.deltaMS);
-      fields.deltaBitsPerSec            = Math.floor(fields.deltaBytes * 1000.0/fields.deltaMS * 8);
-      fields.deltaPacketsPerSec         = Math.floor(fields.deltaPackets * 1000.0/fields.deltaMS);
-      fields.deltaSessionsPerSec        = Math.floor(fields.deltaSessions * 1000.0/fields.deltaMS);
-      fields.deltaSessionBytesPerSec    = Math.floor(fields.deltaSessionBytes * 1000.0/fields.deltaMS);
-      fields.sessionSizePerSec          = Math.floor(fields.deltaSessionBytes/fields.deltaSessions);
-      fields.deltaDroppedPerSec         = Math.floor(fields.deltaDropped * 1000.0/fields.deltaMS);
-      fields.deltaFragsDroppedPerSec    = Math.floor(fields.deltaFragsDropped * 1000.0/fields.deltaMS);
-      fields.deltaOverloadDroppedPerSec = Math.floor(fields.deltaOverloadDropped * 1000.0/fields.deltaMS);
-      fields.deltaESDroppedPerSec       = Math.floor(fields.deltaESDropped * 1000.0/fields.deltaMS);
-      fields.deltaTotalDroppedPerSec    = Math.floor((fields.deltaDropped + fields.deltaOverloadDropped) * 1000.0/fields.deltaMS);
+      fields.deltaBytesPerSec = Math.floor(fields.deltaBytes * 1000.0 / fields.deltaMS);
+      fields.deltaWrittenBytesPerSec = Math.floor(fields.deltaWrittenBytes * 1000.0 / fields.deltaMS);
+      fields.deltaUnwrittenBytesPerSec = Math.floor(fields.deltaUnwrittenBytes * 1000.0 / fields.deltaMS);
+      fields.deltaBitsPerSec = Math.floor(fields.deltaBytes * 1000.0 / fields.deltaMS * 8);
+      fields.deltaPacketsPerSec = Math.floor(fields.deltaPackets * 1000.0 / fields.deltaMS);
+      fields.deltaSessionsPerSec = Math.floor(fields.deltaSessions * 1000.0 / fields.deltaMS);
+      fields.deltaSessionBytesPerSec = Math.floor(fields.deltaSessionBytes * 1000.0 / fields.deltaMS);
+      fields.sessionSizePerSec = Math.floor(fields.deltaSessionBytes / fields.deltaSessions);
+      fields.deltaDroppedPerSec = Math.floor(fields.deltaDropped * 1000.0 / fields.deltaMS);
+      fields.deltaFragsDroppedPerSec = Math.floor(fields.deltaFragsDropped * 1000.0 / fields.deltaMS);
+      fields.deltaOverloadDroppedPerSec = Math.floor(fields.deltaOverloadDropped * 1000.0 / fields.deltaMS);
+      fields.deltaESDroppedPerSec = Math.floor(fields.deltaESDropped * 1000.0 / fields.deltaMS);
+      fields.deltaTotalDroppedPerSec = Math.floor((fields.deltaDropped + fields.deltaOverloadDropped) * 1000.0 / fields.deltaMS);
       results.results.push(fields);
     }
 
     // sort after all the results are aggregated
     req.query.sortField = req.query.sortField || 'nodeName';
-    if (results.results[0] && results.results[0][req.query.sortField]) { // make sure the field exists to sort on
+    if (results.results[0] && results.results[0][req.query.sortField] !== undefined) { // make sure the field exists to sort on
       results.results = results.results.sort((a, b) => {
         if (req.query.desc === 'true') {
           if (!isNaN(a[req.query.sortField])) {
@@ -4370,7 +4437,7 @@ app.get('/dstats.json', [noCacheJson, checkPermissions(['hideStats'])], (req, re
             range: { currentTime: { from: req.query.start, to: req.query.stop } }
           },
           {
-            term: { interval: req.query.interval || 60}
+            term: { interval: req.query.interval || 60 }
           }
         ]
       }
@@ -4378,56 +4445,56 @@ app.get('/dstats.json', [noCacheJson, checkPermissions(['hideStats'])], (req, re
   };
 
   if (nodeName !== undefined && nodeName !== 'Total' && nodeName !== 'Average') {
-    query.sort = {currentTime: {order: 'desc' }};
+    query.sort = { currentTime: { order: 'desc' } };
     query.size = req.query.size || 1440;
-    query.query.bool.filter.push({term: { nodeName: nodeName}});
+    query.query.bool.filter.push({ term: { nodeName: nodeName } });
   } else {
     query.size = 100000;
   }
 
   var mapping = {
-    deltaBits: {_source: ["deltaBytes"], func: function (item) {return Math.floor(item.deltaBytes * 8.0);}},
-    deltaTotalDropped: {_source: ["deltaDropped", "deltaOverloadDropped"], func: function (item) {return Math.floor(item.deltaDropped + item.deltaOverloadDropped);}},
-    deltaBytesPerSec: {_source: ["deltaBytes", "deltaMS"], func: function(item) {return Math.floor(item.deltaBytes * 1000.0/item.deltaMS);}},
-    deltaBitsPerSec: {_source: ["deltaBytes", "deltaMS"], func: function(item) {return Math.floor(item.deltaBytes * 1000.0/item.deltaMS * 8);}},
-    deltaWrittenBytesPerSec: {_source: ["deltaWrittenBytes", "deltaMS"], func: function(item) {return Math.floor(item.deltaWrittenBytes * 1000.0/item.deltaMS);}},
-    deltaUnwrittenBytesPerSec: {_source: ["deltaUnwrittenBytes", "deltaMS"], func: function(item) {return Math.floor(item.deltaUnwrittenBytes * 1000.0/item.deltaMS);}},
-    deltaPacketsPerSec: {_source: ["deltaPackets", "deltaMS"], func: function(item) {return Math.floor(item.deltaPackets * 1000.0/item.deltaMS);}},
-    deltaSessionsPerSec: {_source: ["deltaSessions", "deltaMS"], func: function(item) {return Math.floor(item.deltaSessions * 1000.0/item.deltaMS);}},
-    deltaSessionBytesPerSec: {_source: ["deltaSessionBytes", "deltaMS"], func: function(item) {return Math.floor(item.deltaSessionBytes * 1000.0/item.deltaMS);}},
-    sessionSizePerSec: {_source: ["deltaSessionBytes", "deltaSessions"], func: function(item) {return Math.floor(item.deltaSessionBytes/item.deltaSessions);}},
-    deltaDroppedPerSec: {_source: ["deltaDropped", "deltaMS"], func: function(item) {return Math.floor(item.deltaDropped * 1000.0/item.deltaMS);}},
-    deltaFragsDroppedPerSec: {_source: ["deltaFragsDropped", "deltaMS"], func: function(item) {return Math.floor(item.deltaFragsDropped * 1000.0/item.deltaMS);}},
-    deltaOverloadDroppedPerSec: {_source: ["deltaOverloadDropped", "deltaMS"], func: function(item) {return Math.floor(item.deltaOverloadDropped * 1000.0/item.deltaMS);}},
-    deltaESDroppedPerSec: {_source: ["deltaESDropped", "deltaMS"], func: function(item) {return Math.floor(item.deltaESDropped * 1000.0/item.deltaMS);}},
-    deltaTotalDroppedPerSec: {_source: ["deltaDropped", "deltaOverloadDropped", "deltaMS"], func: function(item) {return Math.floor((item.deltaDropped + item.deltaOverloadDropped) * 1000.0/item.deltaMS);}},
-    cpu: {_source: ["cpu"], func: function (item) {return item.cpu * 0.01;}}
+    deltaBits: { _source: ['deltaBytes'], func: function (item) { return Math.floor(item.deltaBytes * 8.0); } },
+    deltaTotalDropped: { _source: ['deltaDropped', 'deltaOverloadDropped'], func: function (item) { return Math.floor(item.deltaDropped + item.deltaOverloadDropped); } },
+    deltaBytesPerSec: { _source: ['deltaBytes', 'deltaMS'], func: function (item) { return Math.floor(item.deltaBytes * 1000.0 / item.deltaMS); } },
+    deltaBitsPerSec: { _source: ['deltaBytes', 'deltaMS'], func: function (item) { return Math.floor(item.deltaBytes * 1000.0 / item.deltaMS * 8); } },
+    deltaWrittenBytesPerSec: { _source: ['deltaWrittenBytes', 'deltaMS'], func: function (item) { return Math.floor(item.deltaWrittenBytes * 1000.0 / item.deltaMS); } },
+    deltaUnwrittenBytesPerSec: { _source: ['deltaUnwrittenBytes', 'deltaMS'], func: function (item) { return Math.floor(item.deltaUnwrittenBytes * 1000.0 / item.deltaMS); } },
+    deltaPacketsPerSec: { _source: ['deltaPackets', 'deltaMS'], func: function (item) { return Math.floor(item.deltaPackets * 1000.0 / item.deltaMS); } },
+    deltaSessionsPerSec: { _source: ['deltaSessions', 'deltaMS'], func: function (item) { return Math.floor(item.deltaSessions * 1000.0 / item.deltaMS); } },
+    deltaSessionBytesPerSec: { _source: ['deltaSessionBytes', 'deltaMS'], func: function (item) { return Math.floor(item.deltaSessionBytes * 1000.0 / item.deltaMS); } },
+    sessionSizePerSec: { _source: ['deltaSessionBytes', 'deltaSessions'], func: function (item) { return Math.floor(item.deltaSessionBytes / item.deltaSessions); } },
+    deltaDroppedPerSec: { _source: ['deltaDropped', 'deltaMS'], func: function (item) { return Math.floor(item.deltaDropped * 1000.0 / item.deltaMS); } },
+    deltaFragsDroppedPerSec: { _source: ['deltaFragsDropped', 'deltaMS'], func: function (item) { return Math.floor(item.deltaFragsDropped * 1000.0 / item.deltaMS); } },
+    deltaOverloadDroppedPerSec: { _source: ['deltaOverloadDropped', 'deltaMS'], func: function (item) { return Math.floor(item.deltaOverloadDropped * 1000.0 / item.deltaMS); } },
+    deltaESDroppedPerSec: { _source: ['deltaESDropped', 'deltaMS'], func: function (item) { return Math.floor(item.deltaESDropped * 1000.0 / item.deltaMS); } },
+    deltaTotalDroppedPerSec: { _source: ['deltaDropped', 'deltaOverloadDropped', 'deltaMS'], func: function (item) { return Math.floor((item.deltaDropped + item.deltaOverloadDropped) * 1000.0 / item.deltaMS); } },
+    cpu: { _source: ['cpu'], func: function (item) { return item.cpu * 0.01; } }
   };
 
-  query._source = mapping[req.query.name]?mapping[req.query.name]._source:[req.query.name];
-  query._source.push("nodeName", "currentTime");
+  query._source = mapping[req.query.name] ? mapping[req.query.name]._source : [req.query.name];
+  query._source.push('nodeName', 'currentTime');
 
-  var func = mapping[req.query.name]?mapping[req.query.name].func:function(item) {return item[req.query.name];};
+  var func = mapping[req.query.name] ? mapping[req.query.name].func : function (item) { return item[req.query.name]; };
 
-  Db.searchScroll('dstats', 'dstat', query, {filter_path: "_scroll_id,hits.total,hits.hits._source"}, function(err, result) {
+  Db.searchScroll('dstats', 'dstat', query, { filter_path: '_scroll_id,hits.total,hits.hits._source' }, function (err, result) {
     if (err || result.error) {
-      console.log("ERROR - dstats", query, err || result.error);
+      console.log('ERROR - dstats', query, err || result.error);
     }
     var i, ilen;
     var data = {};
-    var num = (req.query.stop - req.query.start)/req.query.step;
+    var num = (req.query.stop - req.query.start) / req.query.step;
 
     var mult = 1;
-    if (req.query.name === "freeSpaceM" || req.query.name === "usedSpaceM") {
+    if (req.query.name === 'freeSpaceM' || req.query.name === 'usedSpaceM') {
       mult = 1000000;
     }
 
-    //console.log("dstats.json result", util.inspect(result, false, 50));
+    // console.log("dstats.json result", util.inspect(result, false, 50));
 
     if (result && result.hits && result.hits.hits) {
       for (i = 0, ilen = result.hits.hits.length; i < ilen; i++) {
         var fields = result.hits.hits[i]._source;
-        var pos = Math.floor((fields.currentTime - req.query.start)/req.query.step);
+        var pos = Math.floor((fields.currentTime - req.query.start) / req.query.step);
 
         if (data[fields.nodeName] === undefined) {
           data[fields.nodeName] = arrayZeroFill(num);
@@ -4467,14 +4534,14 @@ app.get('/dstats.json', [noCacheJson, checkPermissions(['hideStats'])], (req, re
 app.get('/:nodeName/:fileNum/filesize.json', [noCacheJson, checkPermissions(['hideFiles'])], (req, res) => {
   Db.fileIdToFile(req.params.nodeName, req.params.fileNum, (file) => {
     if (!file) {
-      return res.send({filesize: -1});
+      return res.send({ filesize: -1 });
     }
 
     fs.stat(file.name, (err, stats) => {
       if (err || !stats) {
-        return res.send({filesize: -1});
+        return res.send({ filesize: -1 });
       } else {
-        return res.send({filesize: stats.size});
+        return res.send({ filesize: stats.size });
       }
     });
   });
@@ -4502,41 +4569,79 @@ function mapMerge (aggregations) {
   return map;
 }
 
-function graphMerge(req, query, aggregations) {
+function graphMerge (req, query, aggregations) {
+  let filters = req.user.settings.timelineDataFilters || settingDefaults.timelineDataFilters;
+
   let graph = {
-    lpHisto: [],
-    db1Histo: [],
-    db2Histo: [],
-    pa1Histo: [],
-    pa2Histo: [],
-    by1Histo: [],
-    by2Histo: [],
-    xmin: req.query.startTime * 1000|| null,
+    xmin: req.query.startTime * 1000 || null,
     xmax: req.query.stopTime * 1000 || null,
-    interval: query.aggregations?query.aggregations.dbHisto.histogram.interval / 1000 || 60 : 60
+    interval: query.aggregations ? query.aggregations.dbHisto.histogram.interval / 1000 || 60 : 60,
+    sessionsHisto: [],
+    sessionsTotal: 0
   };
+
+  // allowed tot* data map
+  let filtersMap = {
+    'totPackets': ['srcPackets', 'dstPackets'],
+    'totBytes': ['srcBytes', 'dstBytes'],
+    'totDataBytes': ['srcDataBytes', 'dstDataBytes']
+  };
+
+  for (let i = 0; i < filters.length; i++) {
+    let filter = filters[i];
+    if (filtersMap[filter] !== undefined) {
+      for (const j of filtersMap[filter]) {
+        graph[j + 'Histo'] = [];
+      }
+    } else {
+      graph[filter + 'Histo'] = [];
+    }
+
+    graph[filters[i] + 'Total'] = 0;
+  }
 
   if (!aggregations || !aggregations.dbHisto) {
     return graph;
   }
 
-  graph.interval = query.aggregations?(query.aggregations.dbHisto.histogram.interval / 1000) || 60 : 60;
-
   aggregations.dbHisto.buckets.forEach(function (item) {
     let key = item.key;
-    graph.lpHisto.push([key, item.doc_count]);
-    graph.pa1Histo.push([key, item.srcPackets.value]);
-    graph.pa2Histo.push([key, item.dstPackets.value]);
-    graph.db1Histo.push([key, item.srcDataBytes.value]);
-    graph.db2Histo.push([key, item.dstDataBytes.value]);
-    graph.by1Histo.push([key, item.srcBytes.value]);
-    graph.by2Histo.push([key, item.dstBytes.value]);
+
+    // always add session information
+    graph.sessionsHisto.push([key, item.doc_count]);
+    graph.sessionsTotal += item.doc_count;
+
+    for (let prop in item) {
+      // excluding every item prop that isnt a summed up aggregate collection (ie. es keys)
+      // tot* filters are exceptions: they will pass src/dst histo [], but keep a *Total count for filtered total
+      // ie. totPackets selected filter => {srcPacketsHisto: [], dstPacketsHisto:[], totPacketsTotal: n, ...}
+      if (filters.includes(prop) ||
+        prop === 'srcPackets' || prop === 'dstPackets' || prop === 'srcBytes' ||
+        prop === 'dstBytes' || prop === 'srcDataBytes' || prop === 'dstDataBytes') {
+        // Note: prop will never be one of the chosen tot* exceptions
+        graph[prop + 'Histo'].push([key, item[prop].value]);
+
+        // Need to specify for when src/dst AND tot* filters are chosen
+        if (filters.includes(prop)) {
+          graph[prop + 'Total'] += item[prop].value;
+        }
+
+        // Add src/dst to tot* counters.
+        if ((prop === 'srcPackets' || prop === 'dstPackets') && filters.includes('totPackets')) {
+          graph.totPacketsTotal += item[prop].value;
+        } else if ((prop === 'srcBytes' || prop === 'dstBytes') && filters.includes('totBytes')) {
+          graph.totBytesTotal += item[prop].value;
+        } else if ((prop === 'srcDataBytes' || prop === 'dstDataBytes') && filters.includes('totDataBytes')) {
+          graph.totDataBytesTotal += item[prop].value;
+        }
+      }
+    }
   });
 
   return graph;
 }
 
-function fixFields(fields, fixCb) {
+function fixFields (fields, fixCb) {
   if (!fields.fileId) {
     fields.fileId = [];
     return fixCb(null, fields);
@@ -4551,7 +4656,7 @@ function fixFields(fields, fixCb) {
       cb(null);
     });
   },
-  function(err) {
+  function (err) {
     fields.fileId = files;
     fixCb(err, fields);
   });
@@ -4568,7 +4673,7 @@ function fixFields(fields, fixCb) {
  * @param {object} fields The object containing fields to be flattened
  * @returns {object} fields The object with fields flattened
  */
-function flattenFields(fields) {
+function flattenFields (fields) {
   let newFields = {};
 
   for (let key in fields) {
@@ -4617,20 +4722,19 @@ function flattenFields(fields) {
   return fields;
 }
 
-app.use('/buildQuery.json', [noCacheJson, logAction('query')], function(req, res, next) {
-
-  if (req.method === "POST") {
+app.use('/buildQuery.json', [noCacheJson, logAction('query')], function (req, res, next) {
+  if (req.method === 'POST') {
     req.query = req.body;
-  } else if (req.method !== "GET") {
+  } else if (req.method !== 'GET') {
     next();
   }
 
-  buildSessionQuery(req, function(bsqErr, query, indices) {
+  buildSessionQuery(req, function (bsqErr, query, indices) {
     if (bsqErr) {
       res.send({ recordsTotal: 0,
-                 recordsFiltered: 0,
-                 bsqErr: bsqErr.toString()
-               });
+        recordsFiltered: 0,
+        bsqErr: bsqErr.toString()
+      });
       return;
     }
 
@@ -4638,7 +4742,7 @@ app.use('/buildQuery.json', [noCacheJson, logAction('query')], function(req, res
       query._source = queryValueToArray(req.query.fields);
     }
 
-    res.send({"esquery": query, "indices": indices});
+    res.send({ 'esquery': query, 'indices': indices });
   });
 });
 
@@ -4658,7 +4762,7 @@ app.get('/sessions.json', [noCacheJson, recordResponseTime, logAction('sessions'
         map: {},
         bsqErr: bsqErr.toString(),
         health: Db.healthCache(),
-        data:[]
+        data: []
       };
       return res.send(r);
     }
@@ -4692,8 +4796,8 @@ app.get('/sessions.json', [noCacheJson, recordResponseTime, logAction('sessions'
     }
 
     Promise.all([Db.searchPrimary(indices, 'session', query, options),
-                 Db.numberOfDocuments('sessions2-*'),
-                 Db.healthCachePromise()
+      Db.numberOfDocuments('sessions2-*'),
+      Db.healthCachePromise()
     ]).then(([sessions, total, health]) => {
       if (Config.debug) {
         console.log('sessions.json result', util.inspect(sessions, false, 50));
@@ -4704,13 +4808,13 @@ app.get('/sessions.json', [noCacheJson, recordResponseTime, logAction('sessions'
       graph = graphMerge(req, query, sessions.aggregations);
       map = mapMerge(sessions.aggregations);
 
-      var results = {total: sessions.hits.total, results: []};
+      var results = { total: sessions.hits.total, results: [] };
       async.each(sessions.hits.hits, function (hit, hitCb) {
         var fields = hit._source || hit.fields;
         if (fields === undefined) {
           return hitCb(null);
         }
-        //fields.index = hit._index;
+        // fields.index = hit._index;
         fields.id = Db.session2Sid(hit);
 
         if (req.query.flatten === '1') {
@@ -4718,7 +4822,7 @@ app.get('/sessions.json', [noCacheJson, recordResponseTime, logAction('sessions'
         }
 
         if (addMissing) {
-          ['srcPackets', 'dstPackets', 'srcBytes', 'dstBytes', 'srcDataBytes', 'dstDataBytes'].forEach(function(item) {
+          ['srcPackets', 'dstPackets', 'srcBytes', 'dstBytes', 'srcDataBytes', 'dstDataBytes'].forEach(function (item) {
             if (fields[item] === undefined) {
               fields[item] = -1;
             }
@@ -4726,42 +4830,42 @@ app.get('/sessions.json', [noCacheJson, recordResponseTime, logAction('sessions'
           results.results.push(fields);
           return hitCb();
         } else {
-          fixFields(fields, function() {
+          fixFields(fields, function () {
             results.results.push(fields);
             return hitCb();
           });
         }
       }, function () {
-        var r = {recordsTotal: total.count,
-                 recordsFiltered: (results?results.total:0),
-                 graph: graph,
-                 health: health,
-                 map: map,
-                 data: (results?results.results:[])};
+        var r = { recordsTotal: total.count,
+          recordsFiltered: (results ? results.total : 0),
+          graph: graph,
+          health: health,
+          map: map,
+          data: (results ? results.results : []) };
         res.logCounts(r.data.length, r.recordsFiltered, r.recordsTotal);
         try {
           res.send(r);
         } catch (c) {
         }
       });
-    }).catch ((err) => {
+    }).catch((err) => {
       console.log('ERROR - /sessions.json error', err);
-      var r = {recordsTotal: 0,
-               recordsFiltered: 0,
-               graph: {},
-               map: {},
-               health: Db.healthCache(),
-               data:[]};
+      var r = { recordsTotal: 0,
+        recordsFiltered: 0,
+        graph: {},
+        map: {},
+        health: Db.healthCache(),
+        data: [] };
       res.send(r);
     });
   });
 });
 
 app.get('/spigraph.json', [noCacheJson, recordResponseTime, logAction('spigraph'), fieldToExp, setCookie], (req, res) => {
-  req.query.facets = 1;
+  req.query.facets = '1';
 
-  buildSessionQuery(req, function(bsqErr, query, indices) {
-    var results = {items: [], graph: {}, map: {}};
+  buildSessionQuery(req, function (bsqErr, query, indices) {
+    var results = { items: [], graph: {}, map: {} };
     if (bsqErr) {
       return res.molochError(403, bsqErr.toString());
     }
@@ -4800,7 +4904,7 @@ app.get('/spigraph.json', [noCacheJson, recordResponseTime, logAction('spigraph'
       results.map = mapMerge(result.aggregations);
 
       if (!result.aggregations) {
-        result.aggregations = {field: {buckets: []}};
+        result.aggregations = { field: { buckets: [] } };
       }
 
       let aggs = result.aggregations.field.buckets;
@@ -4816,45 +4920,65 @@ app.get('/spigraph.json', [noCacheJson, recordResponseTime, logAction('spigraph'
 
       let queriesInfo = [];
       function endCb () {
-        queriesInfo = queriesInfo.sort((a, b) => {return b.doc_count - a.doc_count;}).slice(0, size * 2);
-        let queries = queriesInfo.map((item) => {return item.query;});
+        queriesInfo = queriesInfo.sort((a, b) => { return b.doc_count - a.doc_count; }).slice(0, size * 2);
+        let queries = queriesInfo.map((item) => { return item.query; });
 
-        Db.msearch(indices, 'session', queries, options, function(err, result) {
+        Db.msearch(indices, 'session', queries, options, function (err, result) {
           if (!result.responses) {
             return res.send(results);
           }
 
-          result.responses.forEach(function(item, i) {
-            var r = {name: queriesInfo[i].key, count: queriesInfo[i].doc_count};
+          result.responses.forEach(function (item, i) {
+            var r = { name: queriesInfo[i].key, count: queriesInfo[i].doc_count };
 
             r.graph = graphMerge(req, query, result.responses[i].aggregations);
+
+            let histoKeys = Object.keys(results.graph).filter(i => i.toLowerCase().includes('histo'));
+            let xMinName = histoKeys.reduce((prev, curr) => results.graph[prev][0][0] < results.graph[curr][0][0] ? prev : curr);
+            let histoXMin = results.graph[xMinName][0][0];
+            let xMaxName = histoKeys.reduce((prev, curr) => {
+              return results.graph[prev][results.graph[prev].length - 1][0] > results.graph[curr][results.graph[curr].length - 1][0] ? prev : curr;
+            });
+            let histoXMax = results.graph[xMaxName][results.graph[xMaxName].length - 1][0];
+
             if (r.graph.xmin === null) {
-              r.graph.xmin = results.graph.xmin || results.graph.pa1Histo[0][0];
+              r.graph.xmin = results.graph.xmin || histoXMin;
             }
 
             if (r.graph.xmax === null) {
-              r.graph.xmax = results.graph.xmax || results.graph.pa1Histo[results.graph.pa1Histo.length - 1][0];
+              r.graph.xmax = results.graph.xmax || histoXMax;
             }
 
             r.map = mapMerge(result.responses[i].aggregations);
+
             results.items.push(r);
-            r.lpHisto = 0.0;
-            r.dbHisto = 0.0;
-            r.byHisto = 0.0;
-            r.paHisto = 0.0;
+            histoKeys.forEach(item => {
+              r[item] = 0.0;
+            });
+
             var graph = r.graph;
-            for (let i = 0; i < graph.lpHisto.length; i++) {
-              r.lpHisto += graph.lpHisto[i][1];
-              r.dbHisto += graph.db1Histo[i][1] + graph.db2Histo[i][1];
-              r.byHisto += graph.by1Histo[i][1] + graph.by2Histo[i][1];
-              r.paHisto += graph.pa1Histo[i][1] + graph.pa2Histo[i][1];
+            for (let j = 0; j < histoKeys.length; j++) {
+              item = histoKeys[j];
+              for (let i = 0; i < graph[item].length; i++) {
+                r[item] += graph[item][i][1];
+              }
             }
+
+            if (graph.totPacketsTotal !== undefined) {
+              r.totPacketsHisto = graph.totPacketsTotal;
+            }
+            if (graph.totDataBytesTotal !== undefined) {
+              r.totDataBytesHisto = graph.totDataBytesTotal;
+            }
+            if (graph.totBytesTotal !== undefined) {
+              r.totBytesHisto = graph.totBytesTotal;
+            }
+
             if (results.items.length === result.responses.length) {
-              var s = req.query.sort || 'lpHisto';
+              var s = req.query.sort || 'sessionsHisto';
               results.items = results.items.sort(function (a, b) {
                 var result;
-                if (s === 'name') { result = a.name.localeCompare(b.name); }
-                else { result = b[s] - a[s]; }
+                if (s === 'name') { result = a.name.localeCompare(b.name); } else { result = b[s] - a[s]; }
                 return result;
               }).slice(0, size);
               return res.send(results);
@@ -4883,20 +5007,20 @@ app.get('/spigraph.json', [noCacheJson, recordResponseTime, logAction('spigraph'
       aggs.forEach((item) => {
         if (field === 'ip.dst:port') {
           filter.term.dstIp = item.key;
-          let sep = (item.key.indexOf(":") === -1)? ':' : '.';
+          let sep = (item.key.indexOf(':') === -1) ? ':' : '.';
           item.sub.buckets.forEach((sitem) => {
             sfilter.term.dstPort = sitem.key;
-            queriesInfo.push({key: item.key + sep + sitem.key, doc_count: sitem.doc_count, query: JSON.stringify(query)});
+            queriesInfo.push({ key: item.key + sep + sitem.key, doc_count: sitem.doc_count, query: JSON.stringify(query) });
           });
         } else if (field === 'fileand') {
           filter.term.node = item.key;
           item.sub.buckets.forEach((sitem) => {
             sfilter.term.fileand = sitem.key;
-            intermediateResults.push({key: filter.term.node + ':' + sitem.key, doc_count: sitem.doc_count, query: JSON.stringify(query)});
+            intermediateResults.push({ key: filter.term.node + ':' + sitem.key, doc_count: sitem.doc_count, query: JSON.stringify(query) });
           });
         } else {
           filter.term[field] = item.key;
-          queriesInfo.push({key: item.key, doc_count: item.doc_count, query: JSON.stringify(query)});
+          queriesInfo.push({ key: item.key, doc_count: item.doc_count, query: JSON.stringify(query) });
         }
       });
 
@@ -4911,23 +5035,22 @@ app.get('/spigraph.json', [noCacheJson, recordResponseTime, logAction('spigraph'
 });
 
 app.get('/spiview.json', [noCacheJson, recordResponseTime, logAction('spiview'), setCookie], (req, res) => {
-
   if (req.query.spi === undefined) {
-    return res.send({spi:{}, recordsTotal: 0, recordsFiltered: 0});
+    return res.send({ spi: {}, recordsTotal: 0, recordsFiltered: 0 });
   }
 
-  var spiDataMaxIndices = +Config.get("spiDataMaxIndices", 4);
+  var spiDataMaxIndices = +Config.get('spiDataMaxIndices', 4);
 
   if (req.query.date === '-1' && spiDataMaxIndices !== -1) {
-    return res.send({spi: {}, bsqErr: "'All' date range not allowed for spiview query"});
+    return res.send({ spi: {}, bsqErr: "'All' date range not allowed for spiview query" });
   }
 
-  buildSessionQuery(req, function(bsqErr, query, indices) {
+  buildSessionQuery(req, function (bsqErr, query, indices) {
     if (bsqErr) {
-      var r = {spi: {},
-               bsqErr: bsqErr.toString(),
-               health: Db.healthCache()
-              };
+      var r = { spi: {},
+        bsqErr: bsqErr.toString(),
+        health: Db.healthCache()
+      };
       return res.send(r);
     }
 
@@ -4937,16 +5060,16 @@ app.get('/spiview.json', [noCacheJson, recordResponseTime, logAction('spiview'),
       query.aggregations = {};
     }
 
-    if (req.query.facets) {
-      query.aggregations.protocols = {terms: {field: "protocol", size:1000}};
+    if (req.query.facets === '1') {
+      query.aggregations.protocols = { terms: { field: 'protocol', size: 1000 } };
     }
 
     queryValueToArray(req.query.spi).forEach(function (item) {
-      var parts = item.split(":");
-      if (parts[0] === "fileand") {
-        query.aggregations[parts[0]] = {terms: {field: "node", size: 1000}, aggregations: {fileId: {terms: {field: "fileId", size: parts.length>1?parseInt(parts[1],10):10}}}};
+      var parts = item.split(':');
+      if (parts[0] === 'fileand') {
+        query.aggregations[parts[0]] = { terms: { field: 'node', size: 1000 }, aggregations: { fileId: { terms: { field: 'fileId', size: parts.length > 1 ? parseInt(parts[1], 10) : 10 } } } };
       } else {
-        query.aggregations[parts[0]] = {terms: {field: parts[0]}};
+        query.aggregations[parts[0]] = { terms: { field: parts[0] } };
 
         if (parts.length > 1) {
           query.aggregations[parts[0]].terms.size = parseInt(parts[1], 10);
@@ -4960,10 +5083,10 @@ app.get('/spiview.json', [noCacheJson, recordResponseTime, logAction('spiview'),
     var graph;
     var map;
 
-    var indicesa = indices.split(",");
+    var indicesa = indices.split(',');
     if (spiDataMaxIndices !== -1 && indicesa.length > spiDataMaxIndices) {
-      bsqErr = "To save ES from blowing up, reducing number of spi data indices searched from " + indicesa.length + " to " + spiDataMaxIndices + ".  This can be increased by setting spiDataMaxIndices in the config file.  Indices being searched: ";
-      indices = indicesa.slice(-spiDataMaxIndices).join(",");
+      bsqErr = 'To save ES from blowing up, reducing number of spi data indices searched from ' + indicesa.length + ' to ' + spiDataMaxIndices + '.  This can be increased by setting spiDataMaxIndices in the config file.  Indices being searched: ';
+      indices = indicesa.slice(-spiDataMaxIndices).join(',');
       bsqErr += indices;
     }
 
@@ -4971,16 +5094,16 @@ app.get('/spiview.json', [noCacheJson, recordResponseTime, logAction('spiview'),
     var protocols;
 
     Promise.all([Db.searchPrimary(indices, 'session', query, null),
-                 Db.numberOfDocuments('sessions2-*'),
-                 Db.healthCachePromise()
+      Db.numberOfDocuments('sessions2-*'),
+      Db.healthCachePromise()
     ]).then(([sessions, total, health]) => {
       if (Config.debug) {
-        console.log("spiview.json result", util.inspect(sessions, false, 50));
+        console.log('spiview.json result', util.inspect(sessions, false, 50));
       }
 
       if (sessions.error) {
         bsqErr = errorString(null, sessions);
-        console.log("spiview.json ERROR", (sessions?sessions.error:null));
+        console.log('spiview.json ERROR', (sessions ? sessions.error : null));
         sendResult();
         return;
       }
@@ -4990,7 +5113,7 @@ app.get('/spiview.json', [noCacheJson, recordResponseTime, logAction('spiview'),
       if (!sessions.aggregations) {
         sessions.aggregations = {};
         for (var spi in query.aggregations) {
-          sessions.aggregations[spi] = {sum_other_doc_count: 0, buckets: []};
+          sessions.aggregations[spi] = { sum_other_doc_count: 0, buckets: [] };
         }
       }
 
@@ -5000,7 +5123,7 @@ app.get('/spiview.json', [noCacheJson, recordResponseTime, logAction('spiview'),
         });
       }
 
-      if (req.query.facets) {
+      if (req.query.facets === '1') {
         graph = graphMerge(req, query, sessions.aggregations);
         map = mapMerge(sessions.aggregations);
         protocols = {};
@@ -5016,15 +5139,15 @@ app.get('/spiview.json', [noCacheJson, recordResponseTime, logAction('spiview'),
         delete sessions.aggregations.protocols;
       }
 
-      function sendResult() {
-        r = {health: health,
-             recordsTotal: total.count,
-             spi: sessions.aggregations,
-             recordsFiltered: recordsFiltered,
-             graph: graph,
-             map: map,
-             protocols: protocols,
-             bsqErr: bsqErr
+      function sendResult () {
+        r = { health: health,
+          recordsTotal: total.count,
+          spi: sessions.aggregations,
+          recordsFiltered: recordsFiltered,
+          graph: graph,
+          map: map,
+          protocols: protocols,
+          bsqErr: bsqErr
         };
         res.logCounts(r.spi.count, r.recordsFiltered, r.total);
         try {
@@ -5039,12 +5162,12 @@ app.get('/spiview.json', [noCacheJson, recordResponseTime, logAction('spiview'),
 
       var nresults = [];
       var sodc = 0;
-      async.each(sessions.aggregations.fileand.buckets, function(nobucket, cb) {
+      async.each(sessions.aggregations.fileand.buckets, function (nobucket, cb) {
         sodc += nobucket.fileId.sum_other_doc_count;
         async.each(nobucket.fileId.buckets, function (fsitem, cb) {
-          Db.fileIdToFile(nobucket.key, fsitem.key, function(file) {
+          Db.fileIdToFile(nobucket.key, fsitem.key, function (file) {
             if (file && file.name) {
-              nresults.push({key: file.name, doc_count: fsitem.doc_count});
+              nresults.push({ key: file.name, doc_count: fsitem.doc_count });
             }
             cb();
           });
@@ -5052,48 +5175,239 @@ app.get('/spiview.json', [noCacheJson, recordResponseTime, logAction('spiview'),
           cb();
         });
       }, function () {
-        nresults = nresults.sort(function(a, b) {
+        nresults = nresults.sort(function (a, b) {
           if (a.doc_count === b.doc_count) {
             return a.key.localeCompare(b.key);
           }
           return b.doc_count - a.doc_count;
         });
-        sessions.aggregations.fileand = {doc_count_error_upper_bound: 0, sum_other_doc_count: sodc, buckets: nresults};
+        sessions.aggregations.fileand = { doc_count_error_upper_bound: 0, sum_other_doc_count: sodc, buckets: nresults };
         return sendResult();
       });
     });
   });
 });
 
-app.get('/dns.json', [noCacheJson, logAction()], function(req, res) {
-  console.log("dns.json", req.query);
+app.get('/reverseDNS.txt', [noCacheJson, logAction()], function (req, res) {
+  // console.log('reverseDNS.txt', req.query);
   dns.reverse(req.query.ip, function (err, data) {
     if (err) {
-      return res.send({hosts: []});
+      return res.send('reverse error');
     }
-    return res.send({hosts: data});
+    return res.send(data.join(', '));
   });
 });
 
-function buildConnections(req, res, cb) {
+// ----------------------------------------------------------------------------
+// buildConnectionQuery(req, fields, options, fsrc, fdst, dstipport, resultId, cb)
+//
+// Returns (via "return cb(...)") an array of 1..2 connection query objects
+// (see the definition of "result" at the beginning of the function), depending on
+// whether or not baseline is enabled. The query and indices are initially returned
+// from buildSessionQuery and then adjusted by this function.
+//
+// The queries represented by these objects can be executed via
+// dbConnectionQuerySearch.
+//
+// This code was factored out from buildConnections.
+// ----------------------------------------------------------------------------
+function buildConnectionQuery (req, fields, options, fsrc, fdst, dstipport, resultId, cb) {
+  let result = {
+    resultId: resultId,
+    err: null,
+    query: null,
+    indices: null,
+    options: options
+  };
+
+  // If network graph baseline is enabled (enabled: req.query.baselineDate != 0, disabled:req.query.baselineDate=0 or undefined)
+  //   then two queries will be run (ie., run buildSessionQuery->searchPrimary->process twice): first for the
+  //   original specified time frame and second for the same time frame immediately preceding it.
+  //
+  // Nodes have an .inresult attribute where:
+  //   0 = 00 = not in either result set (although you'll never see these, obviously)
+  //   1 = 01 = seen during the "current" time frame but not in the "baseline" time frame (ie., "new")
+  //   2 = 10 = seen during the "baseline" time frame but not in the "current" time frame (ie., "old")
+  //   3 = 11 = seen during both the "current" time frame and the "baseline" time frame
+  // This is only performed where startTime/startTime are defined, and never for "all" time range (date=-1).
+  //
+  // With baselining, req.query.baselineDate can determine baseline time frame, which is the number of
+  // hours prior to the "start" query time, similar to req.query.date. If unspecified or zero, baseline
+  // uses the immediate time frame of the same duration immediately prior to the req.query.startTime.
+  // However, If req.query.baselineDate ends with x, the duration of the baseline is the time frame of
+  // the "current" time frame multiplied by that number.
+  let doBaseline = false;
+  let baselineDate = 0;
+  let baselineDateIsMultiplier = false;
+
+  if (((req.query.baselineDate !== undefined) && (req.query.baselineDate.length !== 0) && (String(req.query.baselineDate) !== '0') &&
+        (req.query.date !== '-1') && (req.query.startTime !== undefined) && (req.query.stopTime !== undefined)) ||
+      (resultId > 1)) {
+    doBaseline = true;
+  }
+
+  if (doBaseline) {
+    let baselineDateTmpStr = req.query.baselineDate;
+    if (baselineDateTmpStr.endsWith('x')) {
+      baselineDateIsMultiplier = true;
+      baselineDateTmpStr = baselineDateTmpStr.slice(0, -1);
+    }
+    baselineDate = parseInt(baselineDateTmpStr, 10);
+    doBaseline = (doBaseline && (baselineDate > 0));
+    baselineDateIsMultiplier = (doBaseline && baselineDateIsMultiplier && (baselineDate > 0));
+  }
+
+  // use a copy of req.query as we will modify the startTime/stopTime if we are doing a baseline query
+  let tmpReqQuery = JSON.parse(JSON.stringify(req.query));
+
+  if (resultId > 1) {
+    // replace current time frame start/stop values with baseline time frame start/stop values
+    let currentQueryTimes = determineQueryTimes(req.query);
+    if (Config.debug) {
+      console.log('buildConnections baseline.0', 'startTime', currentQueryTimes[0], 'stopTime', currentQueryTimes[1], baselineDate, baselineDateIsMultiplier ? 'x' : '');
+    }
+    if ((currentQueryTimes[0] !== undefined) && (currentQueryTimes[1] !== undefined)) {
+      // baseline stop time ends 1 second prior to "current" start time
+      tmpReqQuery.stopTime = currentQueryTimes[0] - 1;
+      if ((baselineDate > 0) && (!baselineDateIsMultiplier)) {
+        // baseline time duration was specified (hours)
+        tmpReqQuery.startTime = tmpReqQuery.stopTime - (60 * 60 * baselineDate);
+      } else {
+        // baseline time frame is unspecified, so use the immediate prior time frame of same (or multiplied) duration
+        tmpReqQuery.startTime = tmpReqQuery.stopTime - ((currentQueryTimes[1] - currentQueryTimes[0]) * (baselineDateIsMultiplier ? baselineDate : 1));
+      }
+      if (Config.debug) {
+        console.log('buildConnections baseline.1', 'startTime', tmpReqQuery.startTime, 'stopTime', tmpReqQuery.stopTime, 'diff', (tmpReqQuery.stopTime - tmpReqQuery.startTime));
+      }
+    }
+  } // resultId > 1 (calculating baseline query time frame)
+
+  buildSessionQuery(req, function (bsqErr, query, indices) {
+    if (bsqErr) {
+      console.log('ERROR - buildConnectionQuery -> buildSessionQuery', resultId, bsqErr);
+      result.err = bsqErr;
+      return cb([result]);
+    } else {
+      query.query.bool.filter.push({ exists: { field: req.query.srcField } });
+      query.query.bool.filter.push({ exists: { field: req.query.dstField } });
+
+      query._source = fields;
+      query.docvalue_fields = [fsrc, fdst];
+
+      if (dstipport) {
+        query._source.push('dstPort');
+      }
+
+      result.query = JSON.parse(JSON.stringify(query));
+      result.indices = JSON.parse(JSON.stringify(indices));
+
+      if ((resultId === 1) && (doBaseline)) {
+        buildConnectionQuery(req, fields, options, fsrc, fdst, dstipport, resultId + 1, function (baselineResult) {
+          return cb([result].concat(baselineResult));
+        });
+      } else {
+        return cb([result]);
+      }
+    } // bsqErr if/else
+  }, tmpReqQuery); // buildSessionQuery
+} // buildConnectionQuery
+
+// ----------------------------------------------------------------------------
+// dbConnectionQuerySearch(connQueries, resultId, cb)
+//
+// Executes the query/queries specified in the connQueries array (elements are
+// of the type returned by buildConnectionQuery) by calling Db.searchPrimary
+// and returns the results via callback (see the definition of the "resultSet"
+// object at the beginning of this function). The results are returned in an
+// array containing the result sets which correspond to the queries in the
+// connQueries array.
+//
+// This code was factored out from buildConnections.
+// ----------------------------------------------------------------------------
+function dbConnectionQuerySearch (connQueries, cb) {
+  let resultSet = {
+    resultId: null,
+    err: null,
+    graph: null
+  };
+
+  if (connQueries.length > 0) {
+    resultSet.resultId = connQueries[0] ? connQueries[0].resultId : null;
+    resultSet.err = connQueries[0] ? connQueries[0].err : 'null query object';
+
+    if (((connQueries[0]) && (connQueries[0].err)) || (!connQueries[0])) {
+      // propogate query errors up into the result set without doing a search
+      console.log('ERROR - buildConnectionQuery -> dbConnectionQuerySearch', resultSet.resultId, resultSet.err);
+      return cb([resultSet]);
+    } else {
+      Db.searchPrimary(connQueries[0].indices, 'session', connQueries[0].query, connQueries[0].options, function (err, graph) {
+        if (err || graph.error) {
+          console.log('ERROR - dbConnectionQuerySearch -> Db.searchPrimary', connQueries[0].resultId, err, graph.error);
+          resultSet.err = err || graph.error;
+        }
+        resultSet.graph = graph;
+        if (connQueries.length > 1) {
+          dbConnectionQuerySearch(connQueries.slice(1), function (baselineResultSet) {
+            return cb([resultSet].concat(baselineResultSet));
+          });
+        } else {
+          return cb([resultSet]);
+        }
+      }); // Db.searchPrimary
+    } // if connQueries[0].err) / else
+  } else {
+    return cb([null]);
+  } // (connQueries.length > 0) / else
+} // dbConnectionQuerySearch
+
+// ----------------------------------------------------------------------------
+// buildConnections(req, res, cb)
+//
+// Returns objects needed to populate the graph of logical connections between
+// nodes representing fields of sessions.
+//
+// function flow is:
+//
+// 0. buildConnections
+// 1. buildConnectionQuery       - creates array of 1..2 connQueries
+// 2. dbConnectionQuerySearch    - executes connQueries searches via Db.searchPrimary
+// 3. processResultSets          - accumulate nodes and links into nodesHash/connects hashes
+//    - process
+//      - updateValues
+// 4. processResultSets callback - distill nodesHash/connects hashes into
+//                                 nodes/links arrays and return
+// ----------------------------------------------------------------------------
+function buildConnections (req, res, cb) {
   let dstipport;
   if (req.query.dstField === 'ip.dst:port') {
     dstipport = true;
     req.query.dstField = 'dstIp';
   }
 
-  req.query.srcField       = req.query.srcField || 'srcIp';
-  req.query.dstField       = req.query.dstField || 'dstIp';
+  req.query.srcField = req.query.srcField || 'srcIp';
+  req.query.dstField = req.query.dstField || 'dstIp';
   req.query.iDisplayLength = req.query.iDisplayLength || '5000';
-  let fsrc                 = req.query.srcField;
-  let fdst                 = req.query.dstField;
-  let minConn              = req.query.minConn || 1;
+  let fsrc = req.query.srcField;
+  let fdst = req.query.dstField;
+  let minConn = req.query.minConn || 1;
+
+  // get the requested fields
+  let fields = ['totBytes', 'totDataBytes', 'totPackets', 'node'];
+  if (req.query.fields) { fields = req.query.fields.split(','); }
+
+  let options;
+  if (req.query.cancelId) { options = { cancelId: `${req.user.userId}::${req.query.cancelId}` }; }
 
   let dstIsIp = fdst.match(/(\.ip|Ip)$/);
 
   let nodesHash = {};
   let connects = {};
+  let nodes = [];
+  let links = [];
+  let totalHits = 0;
 
+  // ----------------------------------------------------------------------------/
+  // updateValues and process are for aggregating query results into their final form
   let dbFieldsMap = Config.getDBFieldsMap();
   function updateValues (data, property, fields) {
     for (let i in fields) {
@@ -5119,9 +5433,10 @@ function buildConnections(req, res, cb) {
         }
       }
     }
-  }
+  } // updateValues
 
-  function process (vsrc, vdst, f, fields) {
+  // ----------------------------------------------------------------------------/
+  function process (vsrc, vdst, f, fields, resultId) {
     // ES 6 is returning formatted timestamps instead of ms like pre 6 did
     // https://github.com/elastic/elasticsearch/issues/27740
     if (vsrc.length === 24 && vsrc[23] === 'Z' && vsrc.match(/^\d\d\d\d-\d\d-\d\dT\d\d:\d\d:\d\d.\d\d\dZ$/)) {
@@ -5132,19 +5447,21 @@ function buildConnections(req, res, cb) {
     }
 
     if (nodesHash[vsrc] === undefined) {
-      nodesHash[vsrc] = { id: `${vsrc}`, cnt: 0, sessions: 0 };
+      nodesHash[vsrc] = { id: `${vsrc}`, cnt: 0, sessions: 0, inresult: 0 };
     }
 
     nodesHash[vsrc].sessions++;
     nodesHash[vsrc].type |= 1;
+    nodesHash[vsrc].inresult |= resultId;
     updateValues(f, nodesHash[vsrc], fields);
 
     if (nodesHash[vdst] === undefined) {
-      nodesHash[vdst] = { id: `${vdst}`, cnt: 0, sessions: 0 };
+      nodesHash[vdst] = { id: `${vdst}`, cnt: 0, sessions: 0, inresult: 0 };
     }
 
     nodesHash[vdst].sessions++;
     nodesHash[vdst].type |= 2;
+    nodesHash[vdst].inresult |= resultId;
     updateValues(f, nodesHash[vdst], fields);
 
     let linkId = `${vsrc}->${vdst}`;
@@ -5156,111 +5473,145 @@ function buildConnections(req, res, cb) {
 
     connects[linkId].value++;
     updateValues(f, connects[linkId], fields);
-  }
+  } // process
 
-  buildSessionQuery(req, function(bsqErr, query, indices) {
-    if (bsqErr) {
-      return cb(bsqErr, 0, 0, 0);
-    }
-    query.query.bool.filter.push({exists: {field: req.query.srcField}});
-    query.query.bool.filter.push({exists: {field: req.query.dstField}});
+  // ----------------------------------------------------------------------------//////////
+  // processResultSets - process the hits of each search resultset into nodesHash and connects
+  function processResultSets (connResultSets, cb) {
+    let resultSetStatus = {
+      resultId: null,
+      err: null,
+      hits: 0
+    };
 
-    // get the requested fields
-    let fields = ['totBytes', 'totDataBytes', 'totPackets', 'node'];
-    if (req.query.fields) { fields = req.query.fields.split(','); }
-    query._source = fields;
-    query.docvalue_fields = [fsrc, fdst];
+    if (connResultSets.length > 0) {
+      resultSetStatus.resultId = connResultSets[0] ? connResultSets[0].resultId : null;
+      resultSetStatus.err = connResultSets[0] ? connResultSets[0].err : 'null resultset';
 
-    if (dstipport) {
-      query._source.push('dstPort');
-    }
+      if (((connResultSets[0]) && (connResultSets[0].err)) || (!connResultSets[0])) {
+        // propogate errors up (and stop processing)
+        console.log('ERROR - buildConnectionQuery -> processResultSets', resultSetStatus.resultId, resultSetStatus.err);
+        return cb([resultSetStatus]);
+      } else {
+        async.eachLimit(connResultSets[0].graph.hits.hits, 10, function (hit, hitCb) {
+          let f = hit._source;
+          f = flattenFields(f);
 
-    let options;
-    if (req.query.cancelId) { options = { cancelId: `${req.user.userId}::${req.query.cancelId}` }; }
+          let asrc = hit.fields[fsrc];
+          let adst = hit.fields[fdst];
 
-    if (Config.debug) {
-      console.log('buildConnections query', JSON.stringify(query, null, 2));
-    }
+          if (asrc === undefined || adst === undefined) {
+            return setImmediate(hitCb);
+          }
 
-    Db.searchPrimary(indices, 'session', query, options, function (err, graph) {
-      if (Config.debug) {
-        console.log('buildConnections result', JSON.stringify(graph, null, 2));
-      }
+          if (!Array.isArray(asrc)) { asrc = [asrc]; }
+          if (!Array.isArray(adst)) { adst = [adst]; }
 
-      if (err || graph.error) {
-        console.log('Build Connections ERROR', err, graph.error);
-        return cb(err || graph.error);
-      }
-
-      async.eachLimit(graph.hits.hits, 10, function (hit, hitCb) {
-        let f = hit._source;
-        f = flattenFields(f);
-
-        let asrc = hit.fields[fsrc];
-        let adst = hit.fields[fdst];
-
-        if (asrc === undefined || adst === undefined) {
-          return setImmediate(hitCb);
-        }
-
-        if (!Array.isArray(asrc)) {
-          asrc = [asrc];
-        }
-
-        if (!Array.isArray(adst)) {
-          adst = [adst];
-        }
-
-        for (let vsrc of asrc) {
-          for (let vdst of adst) {
-            if (dstIsIp && dstipport) {
-              if (vdst.includes(':')) {
-                vdst += '.' + f.dstPort;
-              } else {
-                vdst += ':' + f.dstPort;
+          for (let vsrc of asrc) {
+            for (let vdst of adst) {
+              if (dstIsIp && dstipport) {
+                if (vdst.includes(':')) {
+                  vdst += '.' + f.dstPort;
+                } else {
+                  vdst += ':' + f.dstPort;
+                }
               }
-            }
-            process(vsrc, vdst, f, fields);
-          }
-        }
-        setImmediate(hitCb);
-      }, function (err) {
-        let nodes = [];
-        let nodeKeys = Object.keys(nodesHash);
-        if (Config.get('regressionTests', false)) {
-          nodeKeys = nodeKeys.sort(function (a,b) { return nodesHash[a].id.localeCompare(nodesHash[b].id); });
-        }
-        for (let node of nodeKeys) {
-          if (nodesHash[node].cnt < minConn) {
-            nodesHash[node].pos = -1;
+              process(vsrc, vdst, f, fields, connResultSets[0].resultId);
+            } // let vdst of adst
+          } // for vsrc of asrc
+          setImmediate(hitCb);
+        }, function (err) {
+          resultSetStatus.err = err;
+          resultSetStatus.hits = connResultSets[0].graph.hits.total;
+          if (connResultSets.length > 1) {
+            processResultSets(connResultSets.slice(1), function (baselineResultSetStatus) {
+              return cb([resultSetStatus].concat(baselineResultSetStatus));
+            });
           } else {
-            nodesHash[node].pos = nodes.length;
-            nodes.push(nodesHash[node]);
+            return cb([resultSetStatus]);
           }
-        }
+        }); // async.eachLimit(graph.hits.hits) / function(err)
+      } // if connResultSets[0].err) / else
+    } else {
+      return cb([null]);
+    } // (connResultSets.length > 0) / else
+  } // processResultSets
 
-        let links = [];
-        for (let key in connects) {
-          var c = connects[key];
-          c.source = nodesHash[c.source].pos;
-          c.target = nodesHash[c.target].pos;
-          if (c.source >= 0 && c.target >= 0) {
-            links.push(connects[key]);
-          }
-        }
+  // ----------------------------------------------------------------------------//////////
+  // call to build the session query|queries and indices
+  buildConnectionQuery(req, fields, options, fsrc, fdst, dstipport, 1, function (connQueries) {
+    if (Config.debug) {
+      console.log('buildConnections.connQueries', connQueries.length, JSON.stringify(connQueries, null, 2));
+    }
 
+    // ONE or TWO session queries will be executed, depending on if baseline is enabled:
+    //   1. for the "current" time frame, the one specified originally in req.query
+    //   2. for the "baseline" time frame immediately prior to the time frame of "1."
+    //      (only if baseline is enabled)
+    // The call to process() will ensure the resultId value is OR'ed into the .inresult
+    //   attribute of each node.
+
+    // prepare and execute the Db.searchPrimary query|queries
+
+    if (connQueries.length > 0) {
+      dbConnectionQuerySearch(connQueries, function (connResultSets) {
         if (Config.debug) {
-          console.log('nodesHash', nodesHash);
-          console.log('connects', connects);
-          console.log('nodes', nodes.length, nodes);
-          console.log('links', links.length, links);
+          console.log('buildConnections.connResultSets', connResultSets.length, JSON.stringify(connResultSets, null, 2));
         }
 
-        return cb(null, nodes, links, graph.hits.total);
-      });
-    });
-  });
-}
+        // aggregate final return values for nodes and links
+        processResultSets(connResultSets, function (connResultSetStats) {
+          if (Config.debug) {
+            console.log('buildConnections.processResultSets', connResultSetStats.length, JSON.stringify(connResultSetStats, null, 2));
+          }
+
+          for (let stat of connResultSetStats) {
+            if (stat.err) {
+              return cb(stat.err, null, null, null);
+            }
+            totalHits += stat.hits;
+          }
+
+          let nodeKeys = Object.keys(nodesHash);
+          if (Config.get('regressionTests', false)) {
+            nodeKeys = nodeKeys.sort(function (a, b) { return nodesHash[a].id.localeCompare(nodesHash[b].id); });
+          }
+          for (let node of nodeKeys) {
+            if (nodesHash[node].cnt < minConn) {
+              nodesHash[node].pos = -1;
+            } else {
+              nodesHash[node].pos = nodes.length;
+              nodes.push(nodesHash[node]);
+            }
+          }
+
+          for (let key in connects) {
+            var c = connects[key];
+            c.source = nodesHash[c.source].pos;
+            c.target = nodesHash[c.target].pos;
+            if (c.source >= 0 && c.target >= 0) {
+              links.push(connects[key]);
+            }
+          }
+
+          if (Config.debug) {
+            console.log('buildConnections.nodesHash', nodesHash);
+            console.log('buildConnections.connects', connects);
+            console.log('buildConnections.nodes', nodes.length, nodes);
+            console.log('buildConnections.links', links.length, links);
+            console.log('buildConnections.totalHits', totalHits);
+          }
+
+          return cb(null, nodes, links, totalHits);
+        }); // processResultSets.callback
+      }); // dbConnectionQuerySearch.callback
+    } else {
+      let err = 'no connection queries generated';
+      console.log('ERROR - buildConnections', err);
+      return cb(err, null, null, null);
+    } // connQueries.length check
+  }); // buildConnectionQuery.callback
+} // buildConnections
 
 app.get('/connections.json', [noCacheJson, recordResponseTime, logAction('connections'), setCookie], (req, res) => {
   let health;
@@ -5271,10 +5622,10 @@ app.get('/connections.json', [noCacheJson, recordResponseTime, logAction('connec
   });
 });
 
-app.get('/connections.csv', logAction(), function(req, res) {
-  noCache(req, res, "text/csv");
+app.get('/connections.csv', logAction(), function (req, res) {
+  noCache(req, res, 'text/csv');
 
-  var seperator = req.query.seperator || ",";
+  var seperator = req.query.seperator || ',';
   buildConnections(req, res, function (err, nodes, links, total) {
     if (err) {
       return res.send(err);
@@ -5284,7 +5635,7 @@ app.get('/connections.csv', logAction(), function(req, res) {
     let fields = ['totBytes', 'totDataBytes', 'totPackets', 'node'];
     if (req.query.fields) { fields = req.query.fields.split(','); }
 
-    res.write("Source, Destination, Sessions");
+    res.write('Source, Destination, Sessions');
     let displayFields = {};
     for (let field of fields) {
       let fieldsMap = JSON.parse(app.locals.fieldsMap);
@@ -5299,8 +5650,8 @@ app.get('/connections.csv', logAction(), function(req, res) {
     res.write('\r\n');
 
     for (let i = 0, ilen = links.length; i < ilen; i++) {
-      res.write("\"" + nodes[links[i].source].id.replace('"', '""') + "\"" + seperator +
-                "\"" + nodes[links[i].target].id.replace('"', '""') + "\"" + seperator +
+      res.write('"' + nodes[links[i].source].id.replace('"', '""') + '"' + seperator +
+                '"' + nodes[links[i].target].id.replace('"', '""') + '"' + seperator +
                      links[i].value + seperator);
       for (let f = 0, flen = fields.length; f < flen; f++) {
         res.write(links[i][displayFields[fields[f]].dbField].toString());
@@ -5313,14 +5664,14 @@ app.get('/connections.csv', logAction(), function(req, res) {
   });
 });
 
-function csvListWriter(req, res, list, fields, pcapWriter, extension) {
+function csvListWriter (req, res, list, fields, pcapWriter, extension) {
   if (list.length > 0 && list[0].fields) {
-    list = list.sort(function(a,b){return a.fields.lastPacket - b.fields.lastPacket;});
+    list = list.sort(function (a, b) { return a.fields.lastPacket - b.fields.lastPacket; });
   } else if (list.length > 0 && list[0]._source) {
-    list = list.sort(function(a,b){return a._source.lastPacket - b._source.lastPacket;});
+    list = list.sort(function (a, b) { return a._source.lastPacket - b._source.lastPacket; });
   }
 
-  var fieldObjects  = Config.getDBFieldsMap();
+  var fieldObjects = Config.getDBFieldsMap();
 
   if (fields) {
     var columnHeaders = [];
@@ -5347,12 +5698,12 @@ function csvListWriter(req, res, list, fields, pcapWriter, extension) {
       }
 
       if (Array.isArray(value)) {
-        let singleValue = '"' + value.join(', ') +  '"';
+        let singleValue = '"' + value.join(', ') + '"';
         values.push(singleValue);
       } else {
         if (value === undefined) {
           value = '';
-        } else if (typeof(value) === 'string' && value.includes(',')) {
+        } else if (typeof (value) === 'string' && value.includes(',')) {
           if (value.includes('"')) {
             value = value.replace(/"/g, '""');
           }
@@ -5369,11 +5720,11 @@ function csvListWriter(req, res, list, fields, pcapWriter, extension) {
   res.end();
 }
 
-app.get(/\/sessions.csv.*/, logAction(), function(req, res) {
-  noCache(req, res, "text/csv");
+app.get(/\/sessions.csv.*/, logAction(), function (req, res) {
+  noCache(req, res, 'text/csv');
 
   // default fields to display in csv
-  var fields = ["ipProtocol", "firstPacket", "lastPacket", "srcIp", "srcPort", "srcGEO", "dstIp", "dstPort", "dstGEO", "totBytes", "totDataBytes", "totPackets", "node"];
+  var fields = ['ipProtocol', 'firstPacket', 'lastPacket', 'srcIp', 'srcPort', 'srcGEO', 'dstIp', 'dstPort', 'dstGEO', 'totBytes', 'totDataBytes', 'totPackets', 'node'];
   // save requested fields because sessionsListFromQuery returns fields with
   // "rootId" appended onto the end
   var reqFields = fields;
@@ -5384,21 +5735,131 @@ app.get(/\/sessions.csv.*/, logAction(), function(req, res) {
 
   if (req.query.ids) {
     var ids = queryValueToArray(req.query.ids);
-    sessionsListFromIds(req, ids, fields, function(err, list) {
+    sessionsListFromIds(req, ids, fields, function (err, list) {
       csvListWriter(req, res, list, reqFields);
     });
   } else {
-    sessionsListFromQuery(req, res, fields, function(err, list) {
+    sessionsListFromQuery(req, res, fields, function (err, list) {
       csvListWriter(req, res, list, reqFields);
     });
   }
 });
 
-app.get('/multiunique.txt', logAction(), function(req, res) {
+app.get('/spigraphhierarchy', noCacheJson, logAction(), (req, res) => {
+  if (req.query.exp === undefined) {
+    return res.molochError(403, 'Missing exp parameter');
+  }
+
+  let fields = [];
+  let parts = req.query.exp.split(',');
+  for (let i = 0; i < parts.length; i++) {
+    if (internals.scriptAggs[parts[i]] !== undefined) {
+      fields.push(internals.scriptAggs[parts[i]]);
+      continue;
+    }
+    let field = Config.getFieldsMap()[parts[i]];
+    if (!field) {
+      return res.molochError(403, `Unknown expression ${parts[i]}\n`);
+    }
+    fields.push(field);
+  }
+
+  buildSessionQuery(req, function (err, query, indices) {
+    query.size = 0; // Don't need any real results, just aggregations
+    delete query.sort;
+    delete query.aggregations;
+    const size = +req.query.size || 20;
+
+    if (!query.query.bool.must) {
+      query.query.bool.must = [];
+    }
+
+    let lastQ = query;
+    for (let i = 0; i < fields.length; i++) {
+      // Require that each field exists
+      query.query.bool.must.push({ exists: { field: fields[i].dbField } });
+
+      if (fields[i].script) {
+        lastQ.aggregations = { field: { terms: { script: { lang: 'painless', source: fields[i].script }, size: size } } };
+      } else {
+        lastQ.aggregations = { field: { terms: { field: fields[i].dbField, size: size } } };
+      }
+      lastQ = lastQ.aggregations.field;
+    }
+
+    if (Config.debug > 2) {
+      console.log('spigraph pie aggregations', indices, JSON.stringify(query, false, 2));
+    }
+
+    Db.searchPrimary(indices, 'session', query, null, function (err, result) {
+      if (err) {
+        console.log('spigraphpie ERROR', err);
+        res.status(400);
+        return res.end(err);
+      }
+
+      if (Config.debug > 2) {
+        console.log('result', JSON.stringify(result, false, 2));
+      }
+
+      // format the data for the pie graph
+      let hierarchicalResults = { name: 'Top Talkers', children: [] };
+      function addDataToPie (buckets, addTo) {
+        for (let i = 0; i < buckets.length; i++) {
+          let bucket = buckets[i];
+          addTo.push({
+            name: bucket.key,
+            size: bucket.doc_count
+          });
+          if (bucket.field) {
+            addTo[i].children = [];
+            addTo[i].size = undefined; // size is interpreted from children
+            addTo[i].sizeValue = bucket.doc_count; // keep sizeValue for display
+            addDataToPie(bucket.field.buckets, addTo[i].children);
+          }
+        }
+      }
+
+      let grandparent;
+      let tableResults = [];
+      // assumes only 3 levels deep
+      function addDataToTable (buckets, parent) {
+        for (let i = 0; i < buckets.length; i++) {
+          let bucket = buckets[i];
+          if (bucket.field) {
+            if (parent) { grandparent = parent; }
+            addDataToTable(bucket.field.buckets, {
+              name: bucket.key,
+              size: bucket.doc_count
+            });
+          } else {
+            tableResults.push({
+              parent: parent,
+              grandparent: grandparent,
+              name: bucket.key,
+              size: bucket.doc_count
+            });
+          }
+        }
+      }
+
+      addDataToPie(result.aggregations.field.buckets, hierarchicalResults.children);
+      addDataToTable(result.aggregations.field.buckets);
+
+      return res.send({
+        success: true,
+        tableResults: tableResults,
+        hierarchicalResults: hierarchicalResults
+      });
+    });
+  });
+});
+
+app.get('/multiunique.txt', logAction(), function (req, res) {
   noCache(req, res, 'text/plain; charset=utf-8');
 
   if (req.query.exp === undefined) {
-    return res.send("Missing exp parameter");
+    return res.send('Missing exp parameter');
   }
 
   let fields = [];
@@ -5415,17 +5876,17 @@ app.get('/multiunique.txt', logAction(), function(req, res) {
   let doCounts = parseInt(req.query.counts, 10) || 0;
 
   let results = [];
-  function printUnique(buckets, line) {
+  function printUnique (buckets, line) {
     for (let i = 0; i < buckets.length; i++) {
       if (buckets[i].field) {
         printUnique(buckets[i].field.buckets, line + buckets[i].key + separator);
       } else {
-        results.push({line: line + buckets[i].key, count: buckets[i].doc_count});
+        results.push({ line: line + buckets[i].key, count: buckets[i].doc_count });
       }
     }
   }
 
-  buildSessionQuery(req, function(err, query, indices) {
+  buildSessionQuery(req, function (err, query, indices) {
     delete query.sort;
     delete query.aggregations;
     query.size = 0;
@@ -5437,12 +5898,12 @@ app.get('/multiunique.txt', logAction(), function(req, res) {
     let lastQ = query;
     for (let i = 0; i < fields.length; i++) {
       query.query.bool.must.push({ exists: { field: fields[i].dbField } });
-      lastQ.aggregations = {field: { terms : {field : fields[i].dbField, size: +Config.get('maxAggSize', 10000)}}};
+      lastQ.aggregations = { field: { terms: { field: fields[i].dbField, size: +Config.get('maxAggSize', 10000) } } };
       lastQ = lastQ.aggregations.field;
     }
 
     if (Config.debug > 2) {
-      console.log("multiunique aggregations", indices, JSON.stringify(query, false, 2));
+      console.log('multiunique aggregations', indices, JSON.stringify(query, false, 2));
     }
     Db.searchPrimary(indices, 'session', query, null, function (err, result) {
       if (err) {
@@ -5454,10 +5915,10 @@ app.get('/multiunique.txt', logAction(), function(req, res) {
       if (Config.debug > 2) {
         console.log('result', JSON.stringify(result, false, 2));
       }
-      printUnique(result.aggregations.field.buckets, "");
+      printUnique(result.aggregations.field.buckets, '');
 
       if (req.query.sort !== 'field') {
-        results = results.sort(function(a, b) {return b.count - a.count;});
+        results = results.sort(function (a, b) { return b.count - a.count; });
       }
 
       if (doCounts) {
@@ -5474,7 +5935,7 @@ app.get('/multiunique.txt', logAction(), function(req, res) {
   });
 });
 
-app.get('/unique.txt', [logAction(), fieldToExp], function(req, res) {
+app.get('/unique.txt', [logAction(), fieldToExp], function (req, res) {
   noCache(req, res, 'text/plain; charset=utf-8');
 
   if (req.query.field === undefined && req.query.exp === undefined) {
@@ -5503,7 +5964,7 @@ app.get('/unique.txt', [logAction(), fieldToExp], function(req, res) {
     }
 
     aggSize = 1000; // lower agg size for autocomplete
-    doneCb = function() {
+    doneCb = function () {
       res.send(items);
     };
     writeCb = function (item) {
@@ -5523,8 +5984,8 @@ app.get('/unique.txt', [logAction(), fieldToExp], function(req, res) {
   let eachCb = writeCb;
 
   if (req.query.field.match(/(ip.src:port.src|a1:p1|srcIp:srtPort|ip.src:srcPort|ip.dst:port.dst|a2:p2|dstIp:dstPort|ip.dst:dstPort)/)) {
-    eachCb = function(item) {
-      let sep = (item.key.indexOf(':') === -1)? ':' : '.';
+    eachCb = function (item) {
+      let sep = (item.key.indexOf(':') === -1) ? ':' : '.';
       item.field2.buckets.forEach((item2) => {
         item2.key = item.key + sep + item2.key;
         writeCb(item2);
@@ -5532,18 +5993,18 @@ app.get('/unique.txt', [logAction(), fieldToExp], function(req, res) {
     };
   }
 
-  buildSessionQuery(req, function(err, query, indices) {
+  buildSessionQuery(req, function (err, query, indices) {
     delete query.sort;
     delete query.aggregations;
 
     if (req.query.field.match(/(ip.src:port.src|a1:p1|srcIp:srcPort|ip.src:srcPort)/)) {
-      query.aggregations = {field: { terms : {field : 'srcIp', size: aggSize}, aggregations: {field2: {terms: {field: 'srcPort', size: 100}}}}};
+      query.aggregations = { field: { terms: { field: 'srcIp', size: aggSize }, aggregations: { field2: { terms: { field: 'srcPort', size: 100 } } } } };
     } else if (req.query.field.match(/(ip.dst:port.dst|a2:p2|dstIp:dstPort|ip.dst:dstPort)/)) {
-      query.aggregations = {field: { terms : {field : 'dstIp', size: aggSize}, aggregations: {field2: {terms: {field: 'dstPort', size: 100}}}}};
+      query.aggregations = { field: { terms: { field: 'dstIp', size: aggSize }, aggregations: { field2: { terms: { field: 'dstPort', size: 100 } } } } };
     } else if (req.query.field === 'fileand') {
-      query.aggregations = { field: { terms : { field : 'node', size: aggSize }, aggregations: { field2: { terms: { field: 'fileId', size: 100 } } } } };
+      query.aggregations = { field: { terms: { field: 'node', size: aggSize }, aggregations: { field2: { terms: { field: 'fileId', size: 100 } } } } };
     } else {
-      query.aggregations = {field: { terms : {field : req.query.field, size: aggSize}}};
+      query.aggregations = { field: { terms: { field: req.query.field, size: aggSize } } };
     }
 
     query.size = 0;
@@ -5564,7 +6025,7 @@ app.get('/unique.txt', [logAction(), fieldToExp], function(req, res) {
         let fileId = split[1];
         Db.fileIdToFile(node, fileId, function (file) {
           if (file && file.name) {
-            eachCb({key: file.name, doc_count: fsitem.doc_count });
+            eachCb({ key: file.name, doc_count: fsitem.doc_count });
           }
           cb();
         });
@@ -5576,7 +6037,7 @@ app.get('/unique.txt', [logAction(), fieldToExp], function(req, res) {
     Db.searchPrimary(indices, 'session', query, null, function (err, result) {
       if (err) {
         console.log('Error', query, err);
-        return doneCb?doneCb():res.end();
+        return doneCb ? doneCb() : res.end();
       }
       if (Config.debug) {
         console.log('unique.txt result', util.inspect(result, false, 50));
@@ -5584,7 +6045,6 @@ app.get('/unique.txt', [logAction(), fieldToExp], function(req, res) {
       if (!result.aggregations || !result.aggregations.field) {
         return doneCb ? doneCb() : res.end();
       }
-
 
       if (req.query.field === 'fileand') {
         return findFileNames(result);
@@ -5599,16 +6059,16 @@ app.get('/unique.txt', [logAction(), fieldToExp], function(req, res) {
   });
 });
 
-function processSessionIdDisk(session, headerCb, packetCb, endCb, limit) {
+function processSessionIdDisk (session, headerCb, packetCb, endCb, limit) {
   let fields;
 
-  function processFile(pcap, pos, i, nextCb) {
+  function processFile (pcap, pos, i, nextCb) {
     pcap.ref();
-    pcap.readPacket(pos, function(packet) {
-      switch(packet) {
+    pcap.readPacket(pos, function (packet) {
+      switch (packet) {
       case null:
-        let msg = util.format(session._id, "in file", pcap.filename, "couldn't read packet at", pos, "packet #", i, "of", fields.packetPos.length);
-        console.log("ERROR - processSessionIdDisk -", msg);
+        let msg = util.format(session._id, 'in file', pcap.filename, "couldn't read packet at", pos, 'packet #', i, 'of', fields.packetPos.length);
+        console.log('ERROR - processSessionIdDisk -', msg);
         endCb(msg, null);
         break;
       case undefined:
@@ -5625,29 +6085,29 @@ function processSessionIdDisk(session, headerCb, packetCb, endCb, limit) {
 
   var fileNum;
   var itemPos = 0;
-  async.eachLimit(fields.packetPos, limit || 1, function(pos, nextCb) {
+  async.eachLimit(fields.packetPos, limit || 1, function (pos, nextCb) {
     if (pos < 0) {
       fileNum = pos * -1;
       return nextCb(null);
     }
 
     // Get the pcap file for this node a filenum, if it isn't opened then do the filename lookup and open it
-    var opcap = Pcap.get(fields.node + ":" + fileNum);
+    var opcap = Pcap.get(fields.node + ':' + fileNum);
     if (!opcap.isOpen()) {
-      Db.fileIdToFile(fields.node, fileNum, function(file) {
+      Db.fileIdToFile(fields.node, fileNum, function (file) {
         if (!file) {
           console.log("WARNING - Only have SPI data, PCAP file no longer available.  Couldn't look up in file table", fields.node + '-' + fileNum);
-          return nextCb("Only have SPI data, PCAP file no longer available for " + fields.node + '-' + fileNum);
+          return nextCb('Only have SPI data, PCAP file no longer available for ' + fields.node + '-' + fileNum);
         }
         if (file.kekId) {
-          file.kek = Config.sectionGet("keks", file.kekId, undefined);
+          file.kek = Config.sectionGet('keks', file.kekId, undefined);
           if (file.kek === undefined) {
-            console.log("ERROR - Couldn't find kek", file.kekId, "in keks section");
-            return nextCb("Couldn't find kek " + file.kekId + " in keks section");
+            console.log("ERROR - Couldn't find kek", file.kekId, 'in keks section');
+            return nextCb("Couldn't find kek " + file.kekId + ' in keks section');
           }
         }
 
-        var ipcap = Pcap.get(fields.node + ":" + file.num);
+        var ipcap = Pcap.get(fields.node + ':' + file.num);
 
         try {
           ipcap.open(file.name, file);
@@ -5675,16 +6135,16 @@ function processSessionIdDisk(session, headerCb, packetCb, endCb, limit) {
   });
 }
 
-function processSessionId(id, fullSession, headerCb, packetCb, endCb, maxPackets, limit) {
+function processSessionId (id, fullSession, headerCb, packetCb, endCb, maxPackets, limit) {
   var options;
   if (!fullSession) {
-    options  = { _source: 'node,totPackets,packetLen,packetPos,srcIp,srcPort,ipProtocol' };
+    options = { _source: 'node,totPackets,packetPos,srcIp,srcPort,ipProtocol,packetLen' };
   }
 
-  Db.getWithOptions(Db.sid2Index(id), 'session', Db.sid2Id(id), options, function(err, session) {
+  Db.getWithOptions(Db.sid2Index(id), 'session', Db.sid2Id(id), options, function (err, session) {
     if (err || !session.found) {
-      console.log("session get error", err, session);
-      return endCb("Session not found", null);
+      console.log('session get error', err, session);
+      return endCb('Session not found', null);
     }
 
     var fields = session._source || session.fields;
@@ -5696,7 +6156,7 @@ function processSessionId(id, fullSession, headerCb, packetCb, endCb, maxPackets
     /* Go through the list of prefetch the id to file name if we are running in parallel to
      * reduce the number of elasticsearch queries and problems
      */
-    let outstanding = 0, i, ilen;
+    let outstanding = 0; let i; let ilen;
 
     function fileReadyCb (fileInfo) {
       outstanding--;
@@ -5712,8 +6172,8 @@ function processSessionId(id, fullSession, headerCb, packetCb, endCb, maxPackets
       }
     }
 
-    function readyToProcess() {
-      var pcapWriteMethod = Config.getFull(fields.node, "pcapWriteMethod");
+    function readyToProcess () {
+      var pcapWriteMethod = Config.getFull(fields.node, 'pcapWriteMethod');
       var psid = processSessionIdDisk;
       var writer = internals.writers[pcapWriteMethod];
       if (writer && writer.processSessionId) {
@@ -5735,21 +6195,21 @@ function processSessionId(id, fullSession, headerCb, packetCb, endCb, maxPackets
   });
 }
 
-function processSessionIdAndDecode(id, numPackets, doneCb) {
+function processSessionIdAndDecode (id, numPackets, doneCb) {
   var packets = [];
   processSessionId(id, true, null, function (pcap, buffer, cb, i) {
     var obj = {};
     if (buffer.length > 16) {
       pcap.decode(buffer, obj);
     } else {
-      obj = {ip: {p: ""}};
+      obj = { ip: { p: '' } };
     }
     packets[i] = obj;
     cb(null);
   },
-  function(err, session) {
+  function (err, session) {
     if (err) {
-      console.log("ERROR - processSessionIdAndDecode", err);
+      console.log('ERROR - processSessionIdAndDecode', err);
       return doneCb(err);
     }
     packets = packets.filter(Boolean);
@@ -5758,20 +6218,20 @@ function processSessionIdAndDecode(id, numPackets, doneCb) {
     } else if (packets[0].ip === undefined) {
       return doneCb(null, session, []);
     } else if (packets[0].ip.p === 1) {
-      Pcap.reassemble_icmp(packets, numPackets, function(err, results) {
+      Pcap.reassemble_icmp(packets, numPackets, function (err, results) {
         return doneCb(err, session, results);
       });
     } else if (packets[0].ip.p === 6) {
       var key = session.srcIp;
-      Pcap.reassemble_tcp(packets, numPackets, key + ':' + session.srcPort, function(err, results) {
+      Pcap.reassemble_tcp(packets, numPackets, key + ':' + session.srcPort, function (err, results) {
         return doneCb(err, session, results);
       });
     } else if (packets[0].ip.p === 17) {
-      Pcap.reassemble_udp(packets, numPackets, function(err, results) {
+      Pcap.reassemble_udp(packets, numPackets, function (err, results) {
         return doneCb(err, session, results);
       });
     } else if (packets[0].ip.p === 132) {
-      Pcap.reassemble_sctp(packets, numPackets, function(err, results) {
+      Pcap.reassemble_sctp(packets, numPackets, function (err, results) {
         return doneCb(err, session, results);
       });
     } else {
@@ -5781,7 +6241,7 @@ function processSessionIdAndDecode(id, numPackets, doneCb) {
   numPackets, 10);
 }
 
-function localSessionDetailReturnFull(req, res, session, incoming) {
+function localSessionDetailReturnFull (req, res, session, incoming) {
   if (req.packetsOnly) { // only return packets
     res.render('sessionPackets.pug', {
       filename: 'sessionPackets',
@@ -5792,26 +6252,26 @@ function localSessionDetailReturnFull(req, res, session, incoming) {
       data: incoming,
       reqPackets: req.query.packets,
       query: req.query,
-      basedir: "/",
-      reqFields: Config.headers("headers-http-request"),
-      resFields: Config.headers("headers-http-response"),
-      emailFields: Config.headers("headers-email"),
+      basedir: '/',
+      reqFields: Config.headers('headers-http-request'),
+      resFields: Config.headers('headers-http-response'),
+      emailFields: Config.headers('headers-email'),
       showFrames: req.query.showFrames
-    }, function(err, data) {
+    }, function (err, data) {
       if (err) {
-        console.trace("ERROR - localSession - ", err);
+        console.trace('ERROR - localSession - ', err);
         return req.next(err);
       }
       res.send(data);
     });
   } else { // return SPI data and packets
-    res.send("HOW DID I GET HERE?");
-    console.trace("HOW DID I GET HERE");
+    res.send('HOW DID I GET HERE?');
+    console.trace('HOW DID I GET HERE');
   }
 }
 
-function localSessionDetailReturn(req, res, session, incoming) {
-  //console.log("ALW", JSON.stringify(incoming));
+function localSessionDetailReturn (req, res, session, incoming) {
+  // console.log("ALW", JSON.stringify(incoming));
   var numPackets = req.query.packets || 200;
   if (incoming.length > numPackets) {
     incoming.length = numPackets;
@@ -5825,69 +6285,69 @@ function localSessionDetailReturn(req, res, session, incoming) {
     id: session.id,
     nodeName: req.params.nodeName,
     order: [],
-    "ITEM-HTTP": {
+    'ITEM-HTTP': {
       order: []
     },
-    "ITEM-SMTP": {
+    'ITEM-SMTP': {
       order: []
     },
-    "ITEM-CB": {
+    'ITEM-CB': {
     }
   };
 
   if (req.query.needgzip) {
-    options["ITEM-HTTP"].order.push("BODY-UNCOMPRESS");
-    options["ITEM-SMTP"].order.push("BODY-UNBASE64");
-    options["ITEM-SMTP"].order.push("BODY-UNCOMPRESS");
+    options['ITEM-HTTP'].order.push('BODY-UNCOMPRESS');
+    options['ITEM-SMTP'].order.push('BODY-UNBASE64');
+    options['ITEM-SMTP'].order.push('BODY-UNCOMPRESS');
   }
 
-  options.order.push("ITEM-HTTP");
-  options.order.push("ITEM-SMTP");
+  options.order.push('ITEM-HTTP');
+  options.order.push('ITEM-SMTP');
 
-  var decodeOptions = JSON.parse(req.query.decode || "{}");
+  var decodeOptions = JSON.parse(req.query.decode || '{}');
   for (var key in decodeOptions) {
     if (key.match(/^ITEM/)) {
       options.order.push(key);
     } else {
-      options["ITEM-HTTP"].order.push(key);
-      options["ITEM-SMTP"].order.push(key);
+      options['ITEM-HTTP'].order.push(key);
+      options['ITEM-SMTP'].order.push(key);
     }
     options[key] = decodeOptions[key];
   }
 
   if (req.query.needgzip) {
-    options["ITEM-HTTP"].order.push("BODY-UNCOMPRESS");
-    options["ITEM-SMTP"].order.push("BODY-UNCOMPRESS");
+    options['ITEM-HTTP'].order.push('BODY-UNCOMPRESS');
+    options['ITEM-SMTP'].order.push('BODY-UNCOMPRESS');
   }
 
-  options.order.push("ITEM-BYTES");
-  options.order.push("ITEM-SORTER");
+  options.order.push('ITEM-BYTES');
+  options.order.push('ITEM-SORTER');
   if (req.query.needimage) {
-    options.order.push("ITEM-LINKBODY");
+    options.order.push('ITEM-LINKBODY');
   }
-  if (req.query.base === "hex") {
-    options.order.push("ITEM-HEX");
-    options["ITEM-HEX"]= {showOffsets: req.query.line === "true"};
-  } else if (req.query.base === "ascii") {
-    options.order.push("ITEM-ASCII");
-  } else if (req.query.base === "utf8") {
-    options.order.push("ITEM-UTF8");
+  if (req.query.base === 'hex') {
+    options.order.push('ITEM-HEX');
+    options['ITEM-HEX'] = { showOffsets: req.query.line === 'true' };
+  } else if (req.query.base === 'ascii') {
+    options.order.push('ITEM-ASCII');
+  } else if (req.query.base === 'utf8') {
+    options.order.push('ITEM-UTF8');
   } else {
-    options.order.push("ITEM-NATURAL");
+    options.order.push('ITEM-NATURAL');
   }
-  options.order.push("ITEM-CB");
-  options["ITEM-CB"].cb = function(err, outgoing) {
+  options.order.push('ITEM-CB');
+  options['ITEM-CB'].cb = function (err, outgoing) {
     localSessionDetailReturnFull(req, res, session, outgoing);
   };
 
   if (Config.debug) {
-    console.log("Pipeline options", options);
+    console.log('Pipeline options', options);
   }
 
   decode.createPipeline(options, options.order, new decode.Pcap2ItemStream(options, incoming));
 }
 
-function sortFields(session) {
+function sortFields (session) {
   if (session.tags) {
     session.tags = session.tags.sort();
   }
@@ -5907,16 +6367,15 @@ function sortFields(session) {
   }
 }
 
-
-function localSessionDetail(req, res) {
+function localSessionDetail (req, res) {
   if (!req.query) {
-    req.query = { gzip: false, line: false, base: "natural", packets: 200 };
+    req.query = { gzip: false, line: false, base: 'natural', packets: 200 };
   }
 
-  req.query.needgzip = req.query.gzip === "true" || false;
-  req.query.needimage = req.query.image === "true" || false;
-  req.query.line = req.query.line  || false;
-  req.query.base = req.query.base  || "ascii";
+  req.query.needgzip = req.query.gzip === 'true' || false;
+  req.query.needimage = req.query.image === 'true' || false;
+  req.query.line = req.query.line || false;
+  req.query.base = req.query.base || 'ascii';
   req.query.showFrames = req.query.showFrames === 'true' || false;
 
   var packets = [];
@@ -5926,18 +6385,18 @@ function localSessionDetail(req, res) {
       try {
         pcap.decode(buffer, obj);
       } catch (e) {
-        obj = {ip: {p: "Error decoding" + e}};
-        console.trace("loadSessionDetail error", e.stack);
+        obj = { ip: { p: 'Error decoding' + e } };
+        console.trace('loadSessionDetail error', e.stack);
       }
     } else {
-      obj = {ip: {p: "Empty"}};
+      obj = { ip: { p: 'Empty' } };
     }
     packets[i] = obj;
     cb(null);
   },
-  function(err, session) {
+  function (err, session) {
     if (err) {
-      return res.end("Problem loading packets for " + safeStr(req.params.id) + " Error: " + err);
+      return res.end('Problem loading packets for ' + safeStr(req.params.id) + ' Error: ' + err);
     }
     session.id = req.params.id;
     sortFields(session);
@@ -5950,57 +6409,67 @@ function localSessionDetail(req, res) {
         localSessionDetailReturn(req, res, session, results || []);
       });
     } else if (packets.length === 0) {
-      session._err = "No pcap data found";
+      session._err = 'No pcap data found';
       localSessionDetailReturn(req, res, session, []);
+    } else if (packets[0].ether !== undefined && packets[0].ether.data !== undefined) {
+      Pcap.reassemble_generic_ether(packets, +req.query.packets || 200, function (err, results) {
+        session._err = err;
+        localSessionDetailReturn(req, res, session, results || []);
+      });
     } else if (packets[0].ip === undefined) {
       session._err = "Couldn't decode pcap file, check viewer log";
       localSessionDetailReturn(req, res, session, []);
     } else if (packets[0].ip.p === 1) {
-      Pcap.reassemble_icmp(packets, +req.query.packets || 200, function(err, results) {
+      Pcap.reassemble_icmp(packets, +req.query.packets || 200, function (err, results) {
         session._err = err;
         localSessionDetailReturn(req, res, session, results || []);
       });
     } else if (packets[0].ip.p === 6) {
       var key = session.srcIp;
-      Pcap.reassemble_tcp(packets, +req.query.packets || 200, key + ':' + session.srcPort, function(err, results) {
+      Pcap.reassemble_tcp(packets, +req.query.packets || 200, key + ':' + session.srcPort, function (err, results) {
         session._err = err;
         localSessionDetailReturn(req, res, session, results || []);
       });
     } else if (packets[0].ip.p === 17) {
-      Pcap.reassemble_udp(packets, +req.query.packets || 200, function(err, results) {
+      Pcap.reassemble_udp(packets, +req.query.packets || 200, function (err, results) {
         session._err = err;
         localSessionDetailReturn(req, res, session, results || []);
       });
     } else if (packets[0].ip.p === 132) {
-      Pcap.reassemble_sctp(packets, +req.query.packets || 200, function(err, results) {
+      Pcap.reassemble_sctp(packets, +req.query.packets || 200, function (err, results) {
         session._err = err;
         localSessionDetailReturn(req, res, session, results || []);
       });
     } else if (packets[0].ip.p === 50) {
-      Pcap.reassemble_esp(packets, +req.query.packets || 200, function(err, results) {
+      Pcap.reassemble_esp(packets, +req.query.packets || 200, function (err, results) {
         session._err = err;
         localSessionDetailReturn(req, res, session, results || []);
       });
     } else if (packets[0].ip.p === 58) {
-      Pcap.reassemble_icmp(packets, +req.query.packets || 200, function(err, results) {
+      Pcap.reassemble_icmp(packets, +req.query.packets || 200, function (err, results) {
+        session._err = err;
+        localSessionDetailReturn(req, res, session, results || []);
+      });
+    } else if (packets[0].ip.data !== undefined) {
+      Pcap.reassemble_generic_ip(packets, +req.query.packets || 200, function (err, results) {
         session._err = err;
         localSessionDetailReturn(req, res, session, results || []);
       });
     } else {
-      session._err = "Unknown ip.p=" + packets[0].ip.p;
+      session._err = 'Unknown ip.p=' + packets[0].ip.p;
       localSessionDetailReturn(req, res, session, []);
     }
   },
-  req.query.needimage?10000:400, 10);
+  req.query.needimage ? 10000 : 400, 10);
 }
 
 /**
  * Get SPI data for a session
  */
 app.get('/:nodeName/session/:id/detail', cspHeader, logAction(), (req, res) => {
-  Db.getWithOptions(Db.sid2Index(req.params.id), 'session', Db.sid2Id(req.params.id), {}, function(err, session) {
+  Db.getWithOptions(Db.sid2Index(req.params.id), 'session', Db.sid2Id(req.params.id), {}, function (err, session) {
     if (err || !session.found) {
-      return res.end("Couldn't look up SPI data, error for session " + safeStr(req.params.id) + " Error: " +  err);
+      return res.end("Couldn't look up SPI data, error for session " + safeStr(req.params.id) + ' Error: ' + err);
     }
 
     session = session._source;
@@ -6009,28 +6478,28 @@ app.get('/:nodeName/session/:id/detail', cspHeader, logAction(), (req, res) => {
 
     sortFields(session);
 
-    let hidePackets = (session.fileId === undefined || session.fileId.length === 0)?"true":"false";
+    let hidePackets = (session.fileId === undefined || session.fileId.length === 0) ? 'true' : 'false';
     fixFields(session, () => {
       pug.render(internals.sessionDetailNew, {
-        filename    : "sessionDetail",
-        cache       : isProduction(),
+        filename: 'sessionDetail',
+        cache: isProduction(),
         compileDebug: !isProduction(),
-        user        : req.user,
-        session     : session,
-        Db          : Db,
-        query       : req.query,
-        basedir     : "/",
-        hidePackets : hidePackets,
-        reqFields   : Config.headers("headers-http-request"),
-        resFields   : Config.headers("headers-http-response"),
-        emailFields : Config.headers("headers-email")
-      }, function(err, data) {
+        user: req.user,
+        session: session,
+        Db: Db,
+        query: req.query,
+        basedir: '/',
+        hidePackets: hidePackets,
+        reqFields: Config.headers('headers-http-request'),
+        resFields: Config.headers('headers-http-response'),
+        emailFields: Config.headers('headers-email')
+      }, function (err, data) {
         if (err) {
-          console.trace("ERROR - fixFields - ", err);
+          console.trace('ERROR - fixFields - ', err);
           return req.next(err);
         }
         if (Config.debug > 1) {
-          console.log("Detail Rendering", data.replace(/>/g, ">\n"));
+          console.log('Detail Rendering', data.replace(/>/g, '>\n'));
         }
         res.send(data);
       });
@@ -6052,12 +6521,11 @@ app.get('/:nodeName/session/:id/packets', [logAction(), checkPermissions(['hideP
   });
 });
 
-function reqGetRawBody(req, cb) {
-  processSessionIdAndDecode(req.params.id, 10000, function(err, session, incoming) {
+function reqGetRawBody (req, cb) {
+  processSessionIdAndDecode(req.params.id, 10000, function (err, session, incoming) {
     if (err) {
       return cb(err);
     }
-
 
     if (incoming.length === 0) {
       return cb(null, null);
@@ -6067,35 +6535,35 @@ function reqGetRawBody(req, cb) {
       id: session.id,
       nodeName: req.params.nodeName,
       order: [],
-      "ITEM-HTTP": {
+      'ITEM-HTTP': {
         order: []
       },
-      "ITEM-SMTP": {
-        order: ["BODY-UNBASE64"]
+      'ITEM-SMTP': {
+        order: ['BODY-UNBASE64']
       },
-      "ITEM-CB": {
+      'ITEM-CB': {
       },
-      "ITEM-RAWBODY": {
+      'ITEM-RAWBODY': {
         bodyNumber: +req.params.bodyNum
       }
     };
 
     if (req.query.needgzip) {
-      options["ITEM-HTTP"].order.push("BODY-UNCOMPRESS");
-      options["ITEM-SMTP"].order.push("BODY-UNCOMPRESS");
+      options['ITEM-HTTP'].order.push('BODY-UNCOMPRESS');
+      options['ITEM-SMTP'].order.push('BODY-UNCOMPRESS');
     }
 
-    options.order.push("ITEM-HTTP");
-    options.order.push("ITEM-SMTP");
+    options.order.push('ITEM-HTTP');
+    options.order.push('ITEM-SMTP');
 
-    options.order.push("ITEM-RAWBODY");
-    options.order.push("ITEM-CB");
-    options["ITEM-CB"].cb = function(err, items) {
+    options.order.push('ITEM-RAWBODY');
+    options.order.push('ITEM-CB');
+    options['ITEM-CB'].cb = function (err, items) {
       if (err) {
         return cb(err);
       }
       if (items === undefined || items.length === 0) {
-        return cb("No match");
+        return cb('No match');
       }
       cb(err, items[0].data);
     };
@@ -6104,28 +6572,28 @@ function reqGetRawBody(req, cb) {
   });
 }
 
-app.get('/:nodeName/:id/body/:bodyType/:bodyNum/:bodyName', checkProxyRequest, function(req, res) {
+app.get('/:nodeName/:id/body/:bodyType/:bodyNum/:bodyName', checkProxyRequest, function (req, res) {
   reqGetRawBody(req, function (err, data) {
     if (err) {
       console.trace(err);
-      return res.end("Error");
+      return res.end('Error');
     }
-    res.setHeader("Content-Type", "application/force-download");
-    res.setHeader("Content-Disposition", "attachment; filename="+req.params.bodyName);
+    res.setHeader('Content-Type', 'application/force-download');
+    res.setHeader('Content-Disposition', 'attachment; filename=' + req.params.bodyName);
     return res.end(data);
   });
 });
 
-app.get('/:nodeName/:id/bodypng/:bodyType/:bodyNum/:bodyName', checkProxyRequest, function(req, res) {
+app.get('/:nodeName/:id/bodypng/:bodyType/:bodyNum/:bodyName', checkProxyRequest, function (req, res) {
   reqGetRawBody(req, function (err, data) {
     if (err || data === null || data.length === 0) {
-      return res.send (internals.emptyPNG);
+      return res.send(internals.emptyPNG);
     }
-    res.setHeader("Content-Type", "image/png");
+    res.setHeader('Content-Type', 'image/png');
 
-    var png = new PNG({width: internals.PNG_LINE_WIDTH, height: Math.ceil(data.length/internals.PNG_LINE_WIDTH)});
+    var png = new PNG({ width: internals.PNG_LINE_WIDTH, height: Math.ceil(data.length / internals.PNG_LINE_WIDTH) });
     png.data = data;
-    res.send(PNG.sync.write(png, {inputColorType:0, colorType: 0, bitDepth:8, inputHasAlpha:false}));
+    res.send(PNG.sync.write(png, { inputColorType: 0, colorType: 0, bitDepth: 8, inputHasAlpha: false }));
   });
 });
 
@@ -6133,12 +6601,12 @@ app.get('/:nodeName/:id/bodypng/:bodyType/:bodyNum/:bodyName', checkProxyRequest
  * Get a file given a hash of that file
  */
 
-app.get('/bodyHash/:hash', logAction('bodyhash'), function(req, res) {
+app.get('/bodyHash/:hash', logAction('bodyhash'), function (req, res) {
   var hash = null;
   var nodeName = null;
   var sessionID = null;
 
-  buildSessionQuery(req, function(bsqErr, query, indices) {
+  buildSessionQuery(req, function (bsqErr, query, indices) {
     if (bsqErr) {
       res.status(400);
       return res.end(bsqErr);
@@ -6146,81 +6614,79 @@ app.get('/bodyHash/:hash', logAction('bodyhash'), function(req, res) {
 
     query.size = 1;
     query.sort = { lastPacket: { order: 'desc' } };
-    query._source = ["node"];
+    query._source = ['node'];
 
     if (Config.debug) {
       console.log(`sessions.json ${indices} query`, JSON.stringify(query, null, 1));
     }
     Db.searchPrimary(indices, 'session', query, null, function (err, sessions) {
-      if (err ) {
-        console.log ("Error -> Db Search ", err);
+      if (err) {
+        console.log('Error -> Db Search ', err);
         res.status(400);
         res.end(err);
       } else if (sessions.error) {
-        console.log ("Error -> Db Search ", sessions.error);
+        console.log('Error -> Db Search ', sessions.error);
         res.status(400);
         res.end(sessions.error);
       } else {
-          if (Config.debug) {
-            console.log("bodyHash result", util.inspect(sessions, false, 50));
-          }
-          if (sessions.hits.hits.length > 0) {
+        if (Config.debug) {
+          console.log('bodyHash result', util.inspect(sessions, false, 50));
+        }
+        if (sessions.hits.hits.length > 0) {
+          nodeName = sessions.hits.hits[0]._source.node;
+          sessionID = Db.session2Sid(sessions.hits.hits[0]);
+          hash = req.params.hash;
 
-            nodeName = sessions.hits.hits[0]._source.node;
-            sessionID = Db.session2Sid(sessions.hits.hits[0]);
-            hash = req.params.hash;
-
-            isLocalView(nodeName, function () { // get file from the local disk
-              localGetItemByHash (nodeName, sessionID, hash, (err, item) => {
-                if (err) {
-                  res.status(400);
-                  return res.end(err);
-                } else if (item) {
-                  noCache(req, res, 'application/force-download');
-                  res.setHeader("content-disposition", "attachment; filename="+ item.bodyName+".pellet");
-                  return res.end(item.data);
-                } else {
-                  res.status(400);
-                  return res.end("No Match");
-                }
-              });
-            },
-            function () { // get file from the remote disk
-              var preq = util._extend({},req);
-              preq.params.nodeName = nodeName;
-              preq.params.id = sessionID;
-              preq.params.hash = hash;
-              preq.url = Config.basePath(nodeName) + nodeName + '/' + sessionID + '/bodyHash/' + hash;
-              return proxyRequest(preq, res);
+          isLocalView(nodeName, function () { // get file from the local disk
+            localGetItemByHash(nodeName, sessionID, hash, (err, item) => {
+              if (err) {
+                res.status(400);
+                return res.end(err);
+              } else if (item) {
+                noCache(req, res, 'application/force-download');
+                res.setHeader('content-disposition', 'attachment; filename=' + item.bodyName + '.pellet');
+                return res.end(item.data);
+              } else {
+                res.status(400);
+                return res.end('No Match');
+              }
             });
-          }
-          else {
-            res.status(400);
-            res.end ("No Match Found");
-          }
+          },
+          function () { // get file from the remote disk
+            let preq = Object.assign({}, req);
+            preq.params.nodeName = nodeName;
+            preq.params.id = sessionID;
+            preq.params.hash = hash;
+            preq.url = Config.basePath(nodeName) + nodeName + '/' + sessionID + '/bodyHash/' + hash;
+            return proxyRequest(preq, res);
+          });
+        } else {
+          res.status(400);
+          res.end('No Match Found');
+        }
       }
     });
   });
 });
 
-app.get('/:nodeName/:id/bodyHash/:hash', checkProxyRequest, function(req, res) {
-  localGetItemByHash (req.params.nodeName, req.params.id, req.params.hash, (err, item) => {
+app.get('/:nodeName/:id/bodyHash/:hash', checkProxyRequest, function (req, res) {
+  localGetItemByHash(req.params.nodeName, req.params.id, req.params.hash, (err, item) => {
     if (err) {
-       res.status(400);
-       return res.end(err);
+      res.status(400);
+      return res.end(err);
     } else if (item) {
       noCache(req, res, 'application/force-download');
-      res.setHeader("content-disposition", "attachment; filename="+ item.bodyName+".pellet");
+      res.setHeader('content-disposition', 'attachment; filename=' + item.bodyName + '.pellet');
       return res.end(item.data);
     } else {
       res.status(400);
-      return res.end("No Match");
+      return res.end('No Match');
     }
   });
 });
 
-function localGetItemByHash(nodeName, sessionID, hash, cb) {
-  processSessionIdAndDecode(sessionID, 10000, function(err, session, incoming) {
+function localGetItemByHash (nodeName, sessionID, hash, cb) {
+  processSessionIdAndDecode(sessionID, 10000, function (err, session, incoming) {
     if (err) {
       return cb(err);
     }
@@ -6231,29 +6697,29 @@ function localGetItemByHash(nodeName, sessionID, hash, cb) {
       id: sessionID,
       nodeName: nodeName,
       order: [],
-      "ITEM-HTTP": {
+      'ITEM-HTTP': {
         order: []
       },
-      "ITEM-SMTP": {
-        order: ["BODY-UNBASE64"]
+      'ITEM-SMTP': {
+        order: ['BODY-UNBASE64']
       },
-      "ITEM-HASH": {
+      'ITEM-HASH': {
         hash: hash
       },
-      "ITEM-CB": {
+      'ITEM-CB': {
       }
     };
 
-    options.order.push("ITEM-HTTP");
-    options.order.push("ITEM-SMTP");
-    options.order.push("ITEM-HASH");
-    options.order.push("ITEM-CB");
-    options["ITEM-CB"].cb = function(err, items) {
+    options.order.push('ITEM-HTTP');
+    options.order.push('ITEM-SMTP');
+    options.order.push('ITEM-HASH');
+    options.order.push('ITEM-CB');
+    options['ITEM-CB'].cb = function (err, items) {
       if (err) {
         return cb(err, null);
       }
       if (items === undefined || items.length === 0) {
-        return cb("No match", null);
+        return cb('No match', null);
       }
       return cb(err, items[0]);
     };
@@ -6261,7 +6727,7 @@ function localGetItemByHash(nodeName, sessionID, hash, cb) {
   });
 }
 
-function writePcap(res, id, options, doneCb) {
+function writePcap (res, id, options, doneCb) {
   var b = Buffer.alloc(0xfffe);
   var nextPacket = 0;
   var boffset = 0;
@@ -6293,9 +6759,9 @@ function writePcap(res, id, options, doneCb) {
     }
     cb(null);
   },
-  function(err, session) {
+  function (err, session) {
     if (err) {
-      console.trace("writePcap", err);
+      console.trace('writePcap', err);
       return doneCb(err);
     }
     res.write(b.slice(0, boffset));
@@ -6303,7 +6769,7 @@ function writePcap(res, id, options, doneCb) {
   }, undefined, 10);
 }
 
-function writePcapNg(res, id, options, doneCb) {
+function writePcapNg (res, id, options, doneCb) {
   var b = Buffer.alloc(0xfffe);
   var boffset = 0;
 
@@ -6322,29 +6788,29 @@ function writePcapNg(res, id, options, doneCb) {
 
     /* Need to write the ng block, and conver the old timestamp */
 
-    b.writeUInt32LE(0x00000006, boffset);               // Block Type
+    b.writeUInt32LE(0x00000006, boffset); // Block Type
     var len = ((buffer.length + 20 + 3) >> 2) << 2;
-    b.writeUInt32LE(len, boffset + 4);                  // Block Len 1
-    b.writeUInt32LE(0, boffset + 8);                    // Interface Id
+    b.writeUInt32LE(len, boffset + 4); // Block Len 1
+    b.writeUInt32LE(0, boffset + 8); // Interface Id
 
     // js has 53 bit numbers, this will over flow on Jun 05 2255
-    var time = buffer.readUInt32LE(0)*1000000 + buffer.readUInt32LE(4);
-    b.writeUInt32LE(Math.floor(time / 0x100000000), boffset + 12);         // Block Len 1
-    b.writeUInt32LE(time % 0x100000000, boffset + 16);   // Interface Id
+    var time = buffer.readUInt32LE(0) * 1000000 + buffer.readUInt32LE(4);
+    b.writeUInt32LE(Math.floor(time / 0x100000000), boffset + 12); // Block Len 1
+    b.writeUInt32LE(time % 0x100000000, boffset + 16); // Interface Id
 
-    buffer.copy(b, boffset + 20, 8, buffer.length - 8);     // cap_len, packet_len
-    b.fill(0, boffset + 12 + buffer.length, boffset + 12 + buffer.length + (4 - (buffer.length%4)) % 4);   // padding
+    buffer.copy(b, boffset + 20, 8, buffer.length - 8); // cap_len, packet_len
+    b.fill(0, boffset + 12 + buffer.length, boffset + 12 + buffer.length + (4 - (buffer.length % 4)) % 4); // padding
     boffset += len - 8;
 
-    b.writeUInt32LE(0, boffset);                        // Options
-    b.writeUInt32LE(len, boffset+4);                    // Block Len 2
+    b.writeUInt32LE(0, boffset); // Options
+    b.writeUInt32LE(len, boffset + 4); // Block Len 2
     boffset += 8;
 
     cb(null);
   },
-  function(err, session) {
+  function (err, session) {
     if (err) {
-      console.log("writePcapNg", err);
+      console.log('writePcapNg', err);
       return;
     }
     res.write(b.slice(0, boffset));
@@ -6356,13 +6822,13 @@ function writePcapNg(res, id, options, doneCb) {
     var len = ((json.length + 20 + 3) >> 2) << 2;
     b = Buffer.alloc(len);
 
-    b.writeUInt32LE(0x80808080, 0);               // Block Type
-    b.writeUInt32LE(len, 4);                      // Block Len 1
-    b.write("MOWL", 8);                           // Magic
-    b.writeUInt32LE(json.length, 12);             // Block Len 1
-    b.write(json, 16);                            // Magic
-    b.fill(0, 16 + json.length, 16 + json.length + (4 - (json.length%4)) % 4);   // padding
-    b.writeUInt32LE(len, len-4);                  // Block Len 2
+    b.writeUInt32LE(0x80808080, 0); // Block Type
+    b.writeUInt32LE(len, 4); // Block Len 1
+    b.write('MOWL', 8); // Magic
+    b.writeUInt32LE(json.length, 12); // Block Len 1
+    b.write(json, 16); // Magic
+    b.fill(0, 16 + json.length, 16 + json.length + (4 - (json.length % 4)) % 4); // padding
+    b.writeUInt32LE(len, len - 4); // Block Len 2
     res.write(b);
 
     doneCb(err);
@@ -6370,59 +6836,59 @@ function writePcapNg(res, id, options, doneCb) {
 }
 
 app.get('/:nodeName/pcapng/:id.pcapng', [checkProxyRequest, checkPermissions(['disablePcapDownload'])], (req, res) => {
-  noCache(req, res, "application/vnd.tcpdump.pcap");
-  writePcapNg(res, req.params.id, {writeHeader: !req.query || !req.query.noHeader || req.query.noHeader !== "true"}, function () {
+  noCache(req, res, 'application/vnd.tcpdump.pcap');
+  writePcapNg(res, req.params.id, { writeHeader: !req.query || !req.query.noHeader || req.query.noHeader !== 'true' }, function () {
     res.end();
   });
 });
 
 app.get('/:nodeName/pcap/:id.pcap', [checkProxyRequest, checkPermissions(['disablePcapDownload'])], (req, res) => {
-  noCache(req, res, "application/vnd.tcpdump.pcap");
+  noCache(req, res, 'application/vnd.tcpdump.pcap');
 
-  writePcap(res, req.params.id, {writeHeader: !req.query || !req.query.noHeader || req.query.noHeader !== "true"}, function () {
+  writePcap(res, req.params.id, { writeHeader: !req.query || !req.query.noHeader || req.query.noHeader !== 'true' }, function () {
     res.end();
   });
 });
 
-app.get('/:nodeName/raw/:id.png', [checkProxyRequest, checkPermissions(['disablePcapDownload'])], function(req, res) {
-  noCache(req, res, "image/png");
+app.get('/:nodeName/raw/:id.png', [checkProxyRequest, checkPermissions(['disablePcapDownload'])], function (req, res) {
+  noCache(req, res, 'image/png');
 
-  processSessionIdAndDecode(req.params.id, 1000, function(err, session, results) {
+  processSessionIdAndDecode(req.params.id, 1000, function (err, session, results) {
     if (err) {
-      return res.send (internals.emptyPNG);
+      return res.send(internals.emptyPNG);
     }
     var size = 0;
     var i, ilen;
-    for (i = (req.query.type !== 'dst'?0:1), ilen = results.length; i < ilen; i+=2) {
-      size += results[i].data.length + 2*internals.PNG_LINE_WIDTH - (results[i].data.length % internals.PNG_LINE_WIDTH);
+    for (i = (req.query.type !== 'dst' ? 0 : 1), ilen = results.length; i < ilen; i += 2) {
+      size += results[i].data.length + 2 * internals.PNG_LINE_WIDTH - (results[i].data.length % internals.PNG_LINE_WIDTH);
     }
     var buffer = Buffer.alloc(size, 0);
     var pos = 0;
     if (size === 0) {
-      return res.send (internals.emptyPNG);
+      return res.send(internals.emptyPNG);
     }
-    for (i = (req.query.type !== 'dst'?0:1), ilen = results.length; i < ilen; i+=2) {
+    for (i = (req.query.type !== 'dst' ? 0 : 1), ilen = results.length; i < ilen; i += 2) {
       results[i].data.copy(buffer, pos);
       pos += results[i].data.length;
       var fillpos = pos;
-      pos += 2*internals.PNG_LINE_WIDTH - (results[i].data.length % internals.PNG_LINE_WIDTH);
+      pos += 2 * internals.PNG_LINE_WIDTH - (results[i].data.length % internals.PNG_LINE_WIDTH);
       buffer.fill(0xff, fillpos, pos);
     }
 
-    var png = new PNG({width: internals.PNG_LINE_WIDTH, height: (size/internals.PNG_LINE_WIDTH)-1});
+    var png = new PNG({ width: internals.PNG_LINE_WIDTH, height: (size / internals.PNG_LINE_WIDTH) - 1 });
     png.data = buffer;
-    res.send(PNG.sync.write(png, {inputColorType:0, colorType: 0, bitDepth:8, inputHasAlpha:false}));
+    res.send(PNG.sync.write(png, { inputColorType: 0, colorType: 0, bitDepth: 8, inputHasAlpha: false }));
   });
 });
 
-app.get('/:nodeName/raw/:id', [checkProxyRequest, checkPermissions(['disablePcapDownload'])], function(req, res) {
-  noCache(req, res, "application/vnd.tcpdump.pcap");
+app.get('/:nodeName/raw/:id', [checkProxyRequest, checkPermissions(['disablePcapDownload'])], function (req, res) {
+  noCache(req, res, 'application/vnd.tcpdump.pcap');
 
-  processSessionIdAndDecode(req.params.id, 10000, function(err, session, results) {
+  processSessionIdAndDecode(req.params.id, 10000, function (err, session, results) {
     if (err) {
-      return res.send("Error");
+      return res.send('Error');
     }
-    for (let i = (req.query.type !== 'dst'?0:1), ilen = results.length; i < ilen; i+=2) {
+    for (let i = (req.query.type !== 'dst' ? 0 : 1), ilen = results.length; i < ilen; i += 2) {
       res.write(results[i].data);
     }
     res.end();
@@ -6430,20 +6896,20 @@ app.get('/:nodeName/raw/:id', [checkProxyRequest, checkPermissions(['disablePcap
 });
 
 app.get('/:nodeName/entirePcap/:id.pcap', [checkProxyRequest, checkPermissions(['disablePcapDownload'])], (req, res) => {
-  noCache(req, res, "application/vnd.tcpdump.pcap");
+  noCache(req, res, 'application/vnd.tcpdump.pcap');
 
-  var options = {writeHeader: true};
+  var options = { writeHeader: true };
 
-  var query = { _source: ["rootId"],
-                size: 1000,
-                query: {term: {rootId: req.params.id}},
-                sort: { lastPacket: { order: 'asc' } }
-              };
+  var query = { _source: ['rootId'],
+    size: 1000,
+    query: { term: { rootId: req.params.id } },
+    sort: { lastPacket: { order: 'asc' } }
+  };
 
-  console.log("entirePcap query", JSON.stringify(query));
+  console.log('entirePcap query', JSON.stringify(query));
 
   Db.searchPrimary('sessions2-*', 'session', query, null, function (err, data) {
-    async.forEachSeries(data.hits.hits, function(item, nextCb) {
+    async.forEachSeries(data.hits.hits, function (item, nextCb) {
       writePcap(res, Db.session2Sid(item), options, nextCb);
     }, function (err) {
       res.end();
@@ -6451,17 +6917,16 @@ app.get('/:nodeName/entirePcap/:id.pcap', [checkProxyRequest, checkPermissions([
   });
 });
 
-function sessionsPcapList(req, res, list, pcapWriter, extension) {
-
+function sessionsPcapList (req, res, list, pcapWriter, extension) {
   if (list.length > 0 && list[0].fields) {
-    list = list.sort(function(a,b){return a.fields.lastPacket - b.fields.lastPacket;});
+    list = list.sort(function (a, b) { return a.fields.lastPacket - b.fields.lastPacket; });
   } else if (list.length > 0 && list[0]._source) {
-    list = list.sort(function(a,b){return a._source.lastPacket - b._source.lastPacket;});
+    list = list.sort(function (a, b) { return a._source.lastPacket - b._source.lastPacket; });
   }
 
-  var options = {writeHeader: true};
+  var options = { writeHeader: true };
 
-  async.eachLimit(list, 10, function(item, nextCb) {
+  async.eachLimit(list, 10, function (item, nextCb) {
     var fields = item._source || item.fields;
     isLocalView(fields.node, function () {
       // Get from our DISK
@@ -6469,19 +6934,19 @@ function sessionsPcapList(req, res, list, pcapWriter, extension) {
     },
     function () {
       // Get from remote DISK
-      getViewUrl(fields.node, function(err, viewUrl, client) {
-        var buffer = Buffer.alloc(fields.pa*20 + fields.by);
+      getViewUrl(fields.node, function (err, viewUrl, client) {
+        var buffer = Buffer.alloc(fields.pa * 20 + fields.by);
         var bufpos = 0;
         var info = url.parse(viewUrl);
-        info.path = Config.basePath(fields.node) + fields.node + "/" + extension + "/" + Db.session2Sid(item) + "." + extension;
-        info.agent = (client === http?internals.httpAgent:internals.httpsAgent);
+        info.path = Config.basePath(fields.node) + fields.node + '/' + extension + '/' + Db.session2Sid(item) + '.' + extension;
+        info.agent = (client === http ? internals.httpAgent : internals.httpsAgent);
 
         addAuth(info, req.user, fields.node);
         addCaTrust(info, fields.node);
-        var preq = client.request(info, function(pres) {
+        var preq = client.request(info, function (pres) {
           pres.on('data', function (chunk) {
             if (bufpos + chunk.length > buffer.length) {
-              var tmp = Buffer.alloc(buffer.length + chunk.length*10);
+              var tmp = Buffer.alloc(buffer.length + chunk.length * 10);
               buffer.copy(tmp, 0, 0, bufpos);
               buffer = tmp;
             }
@@ -6500,39 +6965,39 @@ function sessionsPcapList(req, res, list, pcapWriter, extension) {
           });
         });
         preq.on('error', function (e) {
-          console.log("ERROR - Couldn't proxy pcap request=", info, "\nerror=", e);
+          console.log("ERROR - Couldn't proxy pcap request=", info, '\nerror=', e);
           nextCb(null);
         });
         preq.end();
       });
     });
-  }, function(err) {
+  }, function (err) {
     res.end();
   });
 }
 
-function sessionsPcap(req, res, pcapWriter, extension) {
-  noCache(req, res, "application/vnd.tcpdump.pcap");
+function sessionsPcap (req, res, pcapWriter, extension) {
+  noCache(req, res, 'application/vnd.tcpdump.pcap');
 
   if (req.query.ids) {
     var ids = queryValueToArray(req.query.ids);
 
-    sessionsListFromIds(req, ids, ["lastPacket", "node", "totBytes", "totPackets", "rootId"], function(err, list) {
+    sessionsListFromIds(req, ids, ['lastPacket', 'node', 'totBytes', 'totPackets', 'rootId'], function (err, list) {
       sessionsPcapList(req, res, list, pcapWriter, extension);
     });
   } else {
-    sessionsListFromQuery(req, res, ["lastPacket", "node", "totBytes", "totPackets", "rootId"], function(err, list) {
+    sessionsListFromQuery(req, res, ['lastPacket', 'node', 'totBytes', 'totPackets', 'rootId'], function (err, list) {
       sessionsPcapList(req, res, list, pcapWriter, extension);
     });
   }
 }
 
 app.get(/\/sessions.pcapng.*/, [logAction(), checkPermissions(['disablePcapDownload'])], (req, res) => {
-  return sessionsPcap(req, res, writePcapNg, "pcapng");
+  return sessionsPcap(req, res, writePcapNg, 'pcapng');
 });
 
 app.get(/\/sessions.pcap.*/, [logAction(), checkPermissions(['disablePcapDownload'])], (req, res) => {
-  return sessionsPcap(req, res, writePcap, "pcap");
+  return sessionsPcap(req, res, writePcap, 'pcap');
 });
 
 internals.usersMissing = {
@@ -6572,39 +7037,39 @@ app.post('/user/list', [noCacheJson, recordResponseTime, logAction('users'), che
   }
 
   req.body.sortField = req.body.sortField || 'userId';
-  query.sort[req.body.sortField] = { order: req.body.desc === true ? 'desc': 'asc' };
+  query.sort[req.body.sortField] = { order: req.body.desc === true ? 'desc' : 'asc' };
   query.sort[req.body.sortField].missing = internals.usersMissing[req.body.sortField];
 
   Promise.all([Db.searchUsers(query),
-               Db.numberOfUsers()
-              ])
-  .then(([users, total]) => {
-    if (users.error) { throw users.error; }
-    let results = { total: users.hits.total, results: [] };
-    for (let i = 0, ilen = users.hits.hits.length; i < ilen; i++) {
-      let fields = users.hits.hits[i]._source || users.hits.hits[i].fields;
-      fields.id = users.hits.hits[i]._id;
-      fields.expression = fields.expression || '';
-      fields.headerAuthEnabled = fields.headerAuthEnabled || false;
-      fields.emailSearch = fields.emailSearch || false;
-      fields.removeEnabled = fields.removeEnabled || false;
-      fields.userName = safeStr(fields.userName || '');
-      fields.packetSearch = fields.packetSearch || false;
-      fields.timeLimit = fields.timeLimit || undefined;
-      results.results.push(fields);
-    }
+    Db.numberOfUsers()
+  ])
+    .then(([users, total]) => {
+      if (users.error) { throw users.error; }
+      let results = { total: users.hits.total, results: [] };
+      for (let i = 0, ilen = users.hits.hits.length; i < ilen; i++) {
+        let fields = users.hits.hits[i]._source || users.hits.hits[i].fields;
+        fields.id = users.hits.hits[i]._id;
+        fields.expression = fields.expression || '';
+        fields.headerAuthEnabled = fields.headerAuthEnabled || false;
+        fields.emailSearch = fields.emailSearch || false;
+        fields.removeEnabled = fields.removeEnabled || false;
+        fields.userName = safeStr(fields.userName || '');
+        fields.packetSearch = fields.packetSearch || false;
+        fields.timeLimit = fields.timeLimit || undefined;
+        results.results.push(fields);
+      }
 
-    let r = {
-      recordsTotal: total.count,
-      recordsFiltered: results.total,
-      data: results.results
-    };
+      let r = {
+        recordsTotal: total.count,
+        recordsFiltered: results.total,
+        data: results.results
+      };
 
-    res.send(r);
-  }).catch((err) => {
-    console.log('ERROR - /user/list', err);
-    return res.send({recordsTotal: 0, recordsFiltered: 0, data: []});
-  });
+      res.send(r);
+    }).catch((err) => {
+      console.log('ERROR - /user/list', err);
+      return res.send({ recordsTotal: 0, recordsFiltered: 0, data: [] });
+    });
 });
 
 app.post('/user/create', [noCacheJson, logAction(), checkCookieToken, checkPermissions(['createEnabled'])], (req, res) => {
@@ -6620,7 +7085,7 @@ app.post('/user/create', [noCacheJson, logAction(), checkCookieToken, checkPermi
     return res.molochError(403, 'User ID cannot be the same as the shared moloch user');
   }
 
-  Db.getUser(req.body.userId, function(err, user) {
+  Db.getUser(req.body.userId, function (err, user) {
     if (!user || user.found) {
       console.log('Trying to add duplicate user', err, user);
       return res.molochError(403, 'User already exists');
@@ -6647,9 +7112,9 @@ app.post('/user/create', [noCacheJson, logAction(), checkCookieToken, checkPermi
     };
 
     // console.log('Creating new user', nuser);
-    Db.setUser(req.body.userId, nuser, function(err, info) {
+    Db.setUser(req.body.userId, nuser, function (err, info) {
       if (!err) {
-        return res.send(JSON.stringify({success: true, text:'User created succesfully'}));
+        return res.send(JSON.stringify({ success: true, text: 'User created succesfully' }));
       } else {
         console.log('ERROR - add user', err, info);
         return res.molochError(403, err);
@@ -6693,9 +7158,9 @@ app.post('/user/delete', [noCacheJson, logAction(), checkCookieToken, checkPermi
     return res.molochError(403, 'Can not delete yourself');
   }
 
-  Db.deleteUser(req.body.userId, function(err, data) {
+  Db.deleteUser(req.body.userId, function (err, data) {
     setTimeout(function () {
-      res.send(JSON.stringify({success: true, text: 'User deleted successfully'}));
+      res.send(JSON.stringify({ success: true, text: 'User deleted successfully' }));
     }, 200);
   });
 });
@@ -6705,15 +7170,15 @@ app.post('/user/update', [noCacheJson, logAction(), checkCookieToken, checkPermi
     return res.molochError(403, 'Missing userId');
   }
 
-  if (req.body.userId === "_moloch_shared") {
+  if (req.body.userId === '_moloch_shared') {
     return res.molochError(403, '_moloch_shared is a shared user. This users settings cannot be updated');
   }
 
-  /*if (req.params.userId === req.user.userId && req.query.createEnabled !== undefined && req.query.createEnabled !== "true") {
+  /* if (req.params.userId === req.user.userId && req.query.createEnabled !== undefined && req.query.createEnabled !== "true") {
     return res.send(JSON.stringify({success: false, text: "Can not turn off your own admin privileges"}));
-  }*/
+  } */
 
-  Db.getUser(req.body.userId, function(err, user) {
+  Db.getUser(req.body.userId, function (err, user) {
     if (err || !user.found) {
       console.log('update user failed', err, user);
       return res.molochError(403, 'User not found');
@@ -6732,7 +7197,7 @@ app.post('/user/update', [noCacheJson, logAction(), checkCookieToken, checkPermi
 
     if (req.body.userName !== undefined) {
       if (req.body.userName.match(/^\s*$/)) {
-        console.log("ERROR - empty username", req.body);
+        console.log('ERROR - empty username', req.body);
         return res.molochError(403, 'Username can not be empty');
       } else {
         user.userName = req.body.userName;
@@ -6755,20 +7220,20 @@ app.post('/user/update', [noCacheJson, logAction(), checkCookieToken, checkPermi
       user.createEnabled = req.body.createEnabled === true;
     }
 
-    Db.setUser(req.body.userId, user, function(err, info) {
+    Db.setUser(req.body.userId, user, function (err, info) {
       if (Config.debug) {
-        console.log("setUser", user, err, info);
+        console.log('setUser', user, err, info);
       }
-      return res.send(JSON.stringify({success: true, text:'User "' + req.body.userId + '" updated successfully'}));
+      return res.send(JSON.stringify({ success: true, text: 'User "' + req.body.userId + '" updated successfully' }));
     });
   });
 });
 
 app.post('/state/:name', [noCacheJson, checkCookieToken, logAction()], (req, res) => {
-  Db.getUser(req.user.userId, function(err, user) {
+  Db.getUser(req.user.userId, function (err, user) {
     if (err || !user.found) {
-      console.log("save state failed", err, user);
-      return res.molochError(403, "Unknown user");
+      console.log('save state failed', err, user);
+      return res.molochError(403, 'Unknown user');
     }
     user = user._source;
 
@@ -6776,23 +7241,23 @@ app.post('/state/:name', [noCacheJson, checkCookieToken, logAction()], (req, res
       user.tableStates = {};
     }
     user.tableStates[req.params.name] = req.body;
-    Db.setUser(user.userId, user, function(err, info) {
+    Db.setUser(user.userId, user, function (err, info) {
       if (err) {
-        console.log("state error", err, info);
-        return res.molochError(403, "state update failed");
+        console.log('state error', err, info);
+        return res.molochError(403, 'state update failed');
       }
-      return res.send(JSON.stringify({success: true, text: "updated state successfully"}));
+      return res.send(JSON.stringify({ success: true, text: 'updated state successfully' }));
     });
   });
 });
 
-app.get('/state/:name', [noCacheJson], function(req, res) {
+app.get('/state/:name', [noCacheJson], function (req, res) {
   if (!req.user.tableStates || !req.user.tableStates[req.params.name]) {
-    return res.send("{}");
+    return res.send('{}');
   }
 
   // Fix for new names
-  if (req.params.name === "sessionsNew" && req.user.tableStates && req.user.tableStates.sessionsNew) {
+  if (req.params.name === 'sessionsNew' && req.user.tableStates && req.user.tableStates.sessionsNew) {
     let item = req.user.tableStates.sessionsNew;
     if (item.visibleHeaders) {
       item.visibleHeaders = item.visibleHeaders.map(oldDB2newDB);
@@ -6805,12 +7270,12 @@ app.get('/state/:name', [noCacheJson], function(req, res) {
   return res.send(req.user.tableStates[req.params.name]);
 });
 
-//////////////////////////////////////////////////////////////////////////////////
-//// Session Add/Remove Tags
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// Session Add/Remove Tags
+// ----------------------------------------------------------------------------
 function addTagsList (allTagNames, sessionList, doneCb) {
   if (!sessionList.length) {
-    console.log('No sessions to add tags to');
+    console.log('No sessions to add tags (', allTagNames, ') to');
     return doneCb(null);
   }
 
@@ -6829,12 +7294,12 @@ function addTagsList (allTagNames, sessionList, doneCb) {
   }, doneCb);
 }
 
-function removeTagsList(res, allTagNames, sessionList) {
+function removeTagsList (res, allTagNames, sessionList) {
   if (!sessionList.length) {
     return res.molochError(200, 'No sessions to remove tags from');
   }
 
-  async.eachLimit(sessionList, 10, function(session, nextCb) {
+  async.eachLimit(sessionList, 10, function (session, nextCb) {
     if (!session._source && !session.fields) {
       console.log('No Fields', session);
       return nextCb(null);
@@ -6847,36 +7312,36 @@ function removeTagsList(res, allTagNames, sessionList) {
       nextCb(null);
     });
   }, function (err) {
-    return res.send(JSON.stringify({success: true, text: 'Tags removed successfully'}));
+    return res.send(JSON.stringify({ success: true, text: 'Tags removed successfully' }));
   });
 }
 
-app.post('/addTags', [noCacheJson, checkHeaderToken, logAction()], function(req, res) {
+app.post('/addTags', [noCacheJson, checkHeaderToken, logAction()], function (req, res) {
   var tags = [];
   if (req.body.tags) {
-    tags = req.body.tags.replace(/[^-a-zA-Z0-9_:,]/g, "").split(",");
+    tags = req.body.tags.replace(/[^-a-zA-Z0-9_:,]/g, '').split(',');
   }
 
-  if (tags.length === 0) { return res.molochError(200, "No tags specified"); }
+  if (tags.length === 0) { return res.molochError(200, 'No tags specified'); }
 
   if (req.body.ids) {
     var ids = queryValueToArray(req.body.ids);
 
-    sessionsListFromIds(req, ids, ["tags", "node"], function(err, list) {
+    sessionsListFromIds(req, ids, ['tags', 'node'], function (err, list) {
       if (!list.length) {
         return res.molochError(200, 'No sessions to add tags to');
       }
       addTagsList(tags, list, function () {
-        return res.send(JSON.stringify({success: true, text: "Tags added successfully"}));
+        return res.send(JSON.stringify({ success: true, text: 'Tags added successfully' }));
       });
     });
   } else {
-    sessionsListFromQuery(req, res, ["tags", "node"], function(err, list) {
+    sessionsListFromQuery(req, res, ['tags', 'node'], function (err, list) {
       if (!list.length) {
         return res.molochError(200, 'No sessions to add tags to');
       }
       addTagsList(tags, list, function () {
-        return res.send(JSON.stringify({success: true, text: "Tags added successfully"}));
+        return res.send(JSON.stringify({ success: true, text: 'Tags added successfully' }));
       });
     });
   }
@@ -6885,58 +7350,58 @@ app.post('/addTags', [noCacheJson, checkHeaderToken, logAction()], function(req,
 app.post('/removeTags', [noCacheJson, checkHeaderToken, logAction(), checkPermissions(['removeEnabled'])], (req, res) => {
   var tags = [];
   if (req.body.tags) {
-    tags = req.body.tags.replace(/[^-a-zA-Z0-9_:,]/g, "").split(",");
+    tags = req.body.tags.replace(/[^-a-zA-Z0-9_:,]/g, '').split(',');
   }
 
-  if (tags.length === 0) { return res.molochError(200, "No tags specified"); }
+  if (tags.length === 0) { return res.molochError(200, 'No tags specified'); }
 
   if (req.body.ids) {
     var ids = queryValueToArray(req.body.ids);
 
-    sessionsListFromIds(req, ids, ["tags"], function(err, list) {
+    sessionsListFromIds(req, ids, ['tags'], function (err, list) {
       removeTagsList(res, tags, list);
     });
   } else {
-    sessionsListFromQuery(req, res, ["tags"], function(err, list) {
+    sessionsListFromQuery(req, res, ['tags'], function (err, list) {
       removeTagsList(res, tags, list);
     });
   }
 });
 
-//////////////////////////////////////////////////////////////////////////////////
-//// Packet Search
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// Packet Search
+// ----------------------------------------------------------------------------
 function packetSearch (packet, options) {
   let found = false;
 
   switch (options.searchType) {
-    case 'asciicase':
-      if (packet.toString().includes(options.search)) {
-        found = true;
-      }
-      break;
-    case 'ascii':
-      if (packet.toString().toLowerCase().includes(options.search.toLowerCase())) {
-        found = true;
-      }
-      break;
-    case 'regex':
-      if (options.regex && packet.toString().match(options.regex)) {
-        found = true;
-      }
-      break;
-    case 'hex':
-      if (packet.toString('hex').includes(options.search)) {
-        found = true;
-      }
-      break;
-    case 'hexregex':
-      if (options.regex && packet.toString('hex').match(options.regex)) {
-        found = true;
-      }
-      break;
-    default:
-      console.log('Invalid hunt search type');
+  case 'asciicase':
+    if (packet.toString().includes(options.search)) {
+      found = true;
+    }
+    break;
+  case 'ascii':
+    if (packet.toString().toLowerCase().includes(options.search.toLowerCase())) {
+      found = true;
+    }
+    break;
+  case 'regex':
+    if (options.regex && packet.toString().match(options.regex)) {
+      found = true;
+    }
+    break;
+  case 'hex':
+    if (packet.toString('hex').includes(options.search)) {
+      found = true;
+    }
+    break;
+  case 'hexregex':
+    if (options.regex && packet.toString('hex').match(options.regex)) {
+      found = true;
+    }
+    break;
+  default:
+    console.log('Invalid hunt search type');
   }
 
   return found;
@@ -6960,7 +7425,7 @@ function sessionHunt (sessionId, options, cb) {
         increment = 2;
       }
 
-      for (i; i < len; i+=increment) {
+      for (i; i < len; i += increment) {
         if (packetSearch(packets[i].data, options)) { return cb(null, true); }
       }
 
@@ -6972,13 +7437,13 @@ function sessionHunt (sessionId, options, cb) {
       if (options.src === options.dst) {
         packets.push(buffer);
       } else {
-          let packet = {};
-          pcap.decode(buffer, packet);
-          packet.data = buffer.slice(16);
-          packets.push(packet);
+        let packet = {};
+        pcap.decode(buffer, packet);
+        packet.data = buffer.slice(16);
+        packets.push(packet);
       }
       cb(null);
-    }, function(err, session) {
+    }, function (err, session) {
       if (err) {
         return cb(null, false);
       }
@@ -7084,7 +7549,7 @@ function updateSessionWithHunt (session, sessionId, hunt, huntId) {
   });
 }
 
-function buildHuntOptions (hunt) {
+function buildHuntOptions (huntId, hunt) {
   let options = {
     src: hunt.src,
     dst: hunt.dst,
@@ -7098,7 +7563,7 @@ function buildHuntOptions (hunt) {
     try {
       options.regex = new RE2(hunt.search);
     } catch (e) {
-      pauseHuntJobWithError(hunt.huntId, hunt, { value: `Hunt error with regex: ${e}` });
+      pauseHuntJobWithError(huntId, hunt, { value: `Hunt error with regex: ${e}` });
     }
   }
 
@@ -7107,10 +7572,10 @@ function buildHuntOptions (hunt) {
 
 // Actually do the search against ES and process the results.
 function runHuntJob (huntId, hunt, query, user) {
-  let options = buildHuntOptions(hunt);
+  let options = buildHuntOptions(huntId, hunt);
   let searchedSessions;
 
-  Db.search('sessions2-*', 'session', query, {scroll: '600s'}, function getMoreUntilDone (err, result) {
+  Db.search('sessions2-*', 'session', query, { scroll: internals.esScrollTimeout }, function getMoreUntilDone (err, result) {
     if (err || result.error) {
       pauseHuntJobWithError(huntId, hunt, { value: `Hunt error searching sessions: ${err}` });
       return;
@@ -7133,6 +7598,11 @@ function runHuntJob (huntId, hunt, query, user) {
       let sessionId = Db.session2Sid(hit);
       let node = session.node;
 
+      // There is no files, this is a fake session, don't hunt it
+      if (session.fileId === undefined || session.fileId.length === 0) {
+        return updateHuntStats(hunt, huntId, session, searchedSessions, cb);
+      }
+
       isLocalView(node, function () {
         sessionHunt(sessionId, options, function (err, matched) {
           if (err) {
@@ -7150,7 +7620,7 @@ function runHuntJob (huntId, hunt, query, user) {
       function () { // Check Remotely
         let path = `${node}/hunt/${huntId}/remote/${sessionId}`;
 
-        makeRequest (node, path, user, (err, response) => {
+        makeRequest(node, path, user, (err, response) => {
           if (err) {
             return pauseHuntJobWithError(huntId, hunt, { value: `Error hunting on remote viewer: ${err}` }, node);
           }
@@ -7164,16 +7634,18 @@ function runHuntJob (huntId, hunt, query, user) {
         });
       });
     }, function (err) { // done running this section of hunt job
-
       // Some kind of error, stop now
       if (err === 'paused' || err === 'undefined') {
+        if (result && result._scroll_id) {
+          Db.clearScroll({ body: { scroll_id: result._scroll_id } });
+        }
         internals.runningHuntJob = undefined;
         return;
       }
 
       // There might be more, issue another scroll
       if (result.hits.hits.length !== 0) {
-        return Db.scroll({ body: { scroll_id: result._scroll_id }, scroll: '600s' }, getMoreUntilDone);
+        return Db.scroll({ body: { scroll_id: result._scroll_id }, scroll: internals.esScrollTimeout }, getMoreUntilDone);
       }
 
       Db.clearScroll({ body: { scroll_id: result._scroll_id } });
@@ -7199,7 +7671,6 @@ function runHuntJob (huntId, hunt, query, user) {
   });
 }
 
-
 // Do the house keeping before actually running the hunt job
 function processHuntJob (huntId, hunt) {
   let now = Math.floor(Date.now() / 1000);
@@ -7210,7 +7681,6 @@ function processHuntJob (huntId, hunt) {
   Db.setHunt(huntId, hunt, (err, info) => {
     if (err) {
       pauseHuntJobWithError(huntId, hunt, { value: `Error starting hunt job: ${err} ${info}` });
-      return;
     }
   });
 
@@ -7255,11 +7725,6 @@ function processHuntJob (huntId, hunt) {
           return;
         }
 
-        // get the size of the query if it is being restarted
-        if (hunt.lastPacketTime) {
-          query.size = hunt.totalSessions - hunt.searchedSessions;
-        }
-
         lookupQueryItems(query.query.bool.filter, (lerr) => {
           query.query.bool.filter[0] = {
             range: {
@@ -7270,7 +7735,7 @@ function processHuntJob (huntId, hunt) {
             }
           };
 
-          query._source = ['lastPacket', 'node', 'huntId', 'huntName'];
+          query._source = ['lastPacket', 'node', 'huntId', 'huntName', 'fileId'];
 
           if (Config.debug > 2) {
             console.log('HUNT', hunt.name, hunt.userId, '- start:', new Date(hunt.lastPacketTime || hunt.query.startTime * 1000), 'stop:', new Date(hunt.query.stopTime * 1000));
@@ -7328,10 +7793,10 @@ function processHuntJobs (cb) {
       // Made to the end without starting a job
       internals.proccessHuntJobsInitialized = true;
       internals.runningHuntJob = undefined;
-      return (cb?cb():null);
+      return (cb ? cb() : null);
     }).catch(err => {
       console.log('Error fetching hunt jobs', err);
-      return (cb?cb():null);
+      return (cb ? cb() : null);
     });
 }
 
@@ -7363,7 +7828,7 @@ function updateHuntStatus (req, res, status, successText, errorText) {
         console.log(errorText, err, info);
         return res.molochError(500, errorText);
       }
-      res.send(JSON.stringify({success: true, text: successText}));
+      res.send(JSON.stringify({ success: true, text: successText }));
       processHuntJobs();
     });
   });
@@ -7387,13 +7852,11 @@ app.post('/hunt', [noCacheJson, logAction('hunt'), checkCookieToken, checkPermis
   }
 
   let searchTypes = [ 'ascii', 'asciicase', 'hex', 'wildcard', 'regex', 'hexregex' ];
-  if (!req.body.hunt.searchType) { return res.molochError(403, 'Missing packet search text type'); }
-  else if (searchTypes.indexOf(req.body.hunt.searchType) === -1) {
+  if (!req.body.hunt.searchType) { return res.molochError(403, 'Missing packet search text type'); } else if (searchTypes.indexOf(req.body.hunt.searchType) === -1) {
     return res.molochError(403, 'Improper packet search text type. Must be "ascii", "asciicase", "hex", "wildcard", "hexregex", or "regex"');
   }
 
-  if (!req.body.hunt.type) { return res.molochError(403, 'Missing packet search type (raw or reassembled packets)'); }
-  else if (req.body.hunt.type !== 'raw' && req.body.hunt.type !== 'reassembled') {
+  if (!req.body.hunt.type) { return res.molochError(403, 'Missing packet search type (raw or reassembled packets)'); } else if (req.body.hunt.type !== 'raw' && req.body.hunt.type !== 'reassembled') {
     return res.molochError(403, 'Improper packet search type. Must be "raw" or "reassembled"');
   }
 
@@ -7422,7 +7885,7 @@ app.post('/hunt', [noCacheJson, logAction('hunt'), checkCookieToken, checkPermis
   Db.createHunt(hunt, function (err, result) {
     if (err) { console.log('create hunt error', err, result); }
     hunt.id = result._id;
-    processHuntJobs( () => {
+    processHuntJobs(() => {
       return res.send(JSON.stringify({ success: true, hunt: hunt }));
     });
   });
@@ -7438,14 +7901,14 @@ app.get('/hunt/list', [noCacheJson, recordResponseTime, checkPermissions(['packe
     query: { bool: { must: [] } }
   };
 
-  query.sort[req.query.sortField || 'created'] = { order: req.query.desc === 'true' ? 'desc': 'asc'};
+  query.sort[req.query.sortField || 'created'] = { order: req.query.desc === 'true' ? 'desc' : 'asc' };
 
   if (req.query.history) { // only get finished jobs
     query.query.bool.must.push({ term: { status: 'finished' } });
     if (req.query.searchTerm) { // apply search term
       query.query.bool.must.push({
         query_string: {
-          query : req.query.searchTerm,
+          query: req.query.searchTerm,
           fields: ['name', 'userId']
         }
       });
@@ -7461,7 +7924,7 @@ app.get('/hunt/list', [noCacheJson, recordResponseTime, checkPermissions(['packe
   }
 
   Promise.all([Db.searchHunt(query),
-               Db.numberOfHunts()])
+    Db.numberOfHunts()])
     .then(([hunts, total]) => {
       if (hunts.error) { throw hunts.error; }
 
@@ -7512,7 +7975,7 @@ app.delete('/hunt/:id', [noCacheJson, logAction('hunt/:id'), checkCookieToken, c
       console.log('ERROR - deleting hunt item', err || result.error);
       return res.molochError(500, 'Error deleting hunt item');
     } else {
-      res.send(JSON.stringify({success: true, text: 'Deleted hunt item successfully'}));
+      res.send(JSON.stringify({ success: true, text: 'Deleted hunt item successfully' }));
     }
   });
 });
@@ -7533,14 +7996,14 @@ app.get('/:nodeName/hunt/:huntId/remote/:sessionId', [noCacheJson], function (re
 
   // fetch hunt and session
   Promise.all([Db.get('hunts', 'hunt', huntId),
-               Db.get(Db.sid2Index(sessionId), 'session', Db.sid2Id(sessionId))])
+    Db.get(Db.sid2Index(sessionId), 'session', Db.sid2Id(sessionId))])
     .then(([hunt, session]) => {
       if (hunt.error || session.error) { res.send({ matched: false }); }
 
       hunt = hunt._source;
       session = session._source;
 
-      let options = buildHuntOptions(hunt);
+      let options = buildHuntOptions(huntId, hunt);
 
       sessionHunt(sessionId, options, function (err, matched) {
         if (err) {
@@ -7559,10 +8022,9 @@ app.get('/:nodeName/hunt/:huntId/remote/:sessionId', [noCacheJson], function (re
     });
 });
 
-
-//////////////////////////////////////////////////////////////////////////////////
-//// Lookups
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// Lookups
+// ----------------------------------------------------------------------------
 let lookupMutex = new Mutex();
 
 app.get('/lookups', [noCacheJson, getSettingUserCache, recordResponseTime], function (req, res) {
@@ -7640,9 +8102,9 @@ app.get('/lookups', [noCacheJson, getSettingUserCache, recordResponseTime], func
         const name = `$${lookup.name}`;
         lookup.exp = name;
         lookup.dbField = name;
-        lookup.help = lookup.description ?
-          `${lookup.description}: ${values.join(', ')}` :
-          `${values.join(',')}`;
+        lookup.help = lookup.description
+          ? `${lookup.description}: ${values.join(', ')}`
+          : `${values.join(',')}`;
       }
 
       lookup.value = values.join('\n');
@@ -7790,9 +8252,9 @@ app.put('/lookups/:id', [noCacheJson, getSettingUserDb, logAction('lookups/:id')
       sentVar.value = values.join('\n');
 
       return res.send(JSON.stringify({
-        success : true,
-        var     : sentVar,
-        text    : 'Successfully updated shortcut'
+        success: true,
+        var: sentVar,
+        text: 'Successfully updated shortcut'
       }));
     });
   });
@@ -7815,16 +8277,16 @@ app.delete('/lookups/:id', [noCacheJson, getSettingUserDb, logAction('lookups/:i
         console.log('ERROR - deleting shortcut', err || result.error);
         return res.molochError(500, 'Error deleting shortcut');
       } else {
-        res.send(JSON.stringify({success: true, text: 'Deleted shortcut successfully'}));
+        res.send(JSON.stringify({ success: true, text: 'Deleted shortcut successfully' }));
       }
     });
   });
 });
 
-//////////////////////////////////////////////////////////////////////////////////
-//// SPI/PCAP Delete/Scrub
-//////////////////////////////////////////////////////////////////////////////////
-function pcapScrub(req, res, sid, whatToRemove, endCb) {
+// ----------------------------------------------------------------------------
+// SPI/PCAP Delete/Scrub
+// ----------------------------------------------------------------------------
+function pcapScrub (req, res, sid, whatToRemove, endCb) {
   if (pcapScrub.scrubbingBuffers === undefined) {
     pcapScrub.scrubbingBuffers = [Buffer.alloc(5000), Buffer.alloc(5000), Buffer.alloc(5000)];
     pcapScrub.scrubbingBuffers[0].fill(0);
@@ -7859,7 +8321,7 @@ function pcapScrub(req, res, sid, whatToRemove, endCb) {
     });
   }
 
-  Db.getWithOptions(Db.sid2Index(sid), 'session', Db.sid2Id(sid), {_source: 'node,ipProtocol,packetPos'}, function (err, session) {
+  Db.getWithOptions(Db.sid2Index(sid), 'session', Db.sid2Id(sid), { _source: 'node,ipProtocol,packetPos' }, function (err, session) {
     let fileNum;
     let itemPos = 0;
     const fields = session._source || session.fields;
@@ -7913,7 +8375,7 @@ function pcapScrub(req, res, sid, whatToRemove, endCb) {
               scrubat: new Date().getTime()
             }
           };
-          Db.update(session._index, 'session', session._id, document, function (err, data) {
+          Db.updateSession(session._index, session._id, document, function (err, data) {
             return endCb(pcapErr, fields);
           });
         }
@@ -7932,7 +8394,7 @@ app.get('/:nodeName/delete/:whatToRemove/:sid', [checkProxyRequest, checkPermiss
   });
 });
 
-function scrubList(req, res, whatToRemove, list) {
+function scrubList (req, res, whatToRemove, list) {
   if (!list) { return res.molochError(200, 'Missing list of sessions'); }
 
   async.eachLimit(list, 10, function (item, nextCb) {
@@ -7990,10 +8452,10 @@ app.post('/delete', [noCacheJson, checkCookieToken, logAction(), checkPermission
   }
 });
 
-//////////////////////////////////////////////////////////////////////////////////
-//// Sending/Receive sessions
-//////////////////////////////////////////////////////////////////////////////////
-function sendSessionWorker(options, cb) {
+// ----------------------------------------------------------------------------
+// Sending/Receive sessions
+// ----------------------------------------------------------------------------
+function sendSessionWorker (options, cb) {
   var packetslen = 0;
   var packets = [];
   var packetshdr;
@@ -8001,14 +8463,14 @@ function sendSessionWorker(options, cb) {
   var tags = [];
 
   if (!options.saveId) {
-    return cb({success: false, text: "Missing saveId"});
+    return cb({ success: false, text: 'Missing saveId' });
   }
 
   if (!options.cluster) {
-    return cb({success: false, text: "Missing cluster"});
+    return cb({ success: false, text: 'Missing cluster' });
   }
 
-  processSessionId(options.id, true, function(pcap, header) {
+  processSessionId(options.id, true, function (pcap, header) {
     packetshdr = header;
   }, function (pcap, packet, pcb, i) {
     packetslen += packet.length;
@@ -8017,7 +8479,7 @@ function sendSessionWorker(options, cb) {
   }, function (err, session) {
     var buffer;
     if (err || !packetshdr) {
-      console.log("WARNING - No PCAP only sending SPI data err:", err);
+      console.log('WARNING - No PCAP only sending SPI data err:', err);
       buffer = Buffer.alloc(0);
       ps = [];
     } else {
@@ -8025,14 +8487,14 @@ function sendSessionWorker(options, cb) {
       var pos = 0;
       packetshdr.copy(buffer);
       pos += packetshdr.length;
-      for(let i = 0, ilen = packets.length; i < ilen; i++) {
+      for (let i = 0, ilen = packets.length; i < ilen; i++) {
         ps.push(pos);
         packets[i].copy(buffer, pos);
         pos += packets[i].length;
       }
     }
     if (!session) {
-      console.log("no session" , session, "err", err, "id", options.id);
+      console.log('no session', session, 'err', err, 'id', options.id);
       return;
     }
     session.id = options.id;
@@ -8040,48 +8502,48 @@ function sendSessionWorker(options, cb) {
     delete session.fileId;
 
     if (options.tags) {
-      tags = options.tags.replace(/[^-a-zA-Z0-9_:,]/g, "").split(",");
+      tags = options.tags.replace(/[^-a-zA-Z0-9_:,]/g, '').split(',');
       if (!session.tags) {
         session.tags = [];
       }
       session.tags = session.tags.concat(tags);
     }
 
-    var molochClusters = Config.configMap("moloch-clusters");
+    var molochClusters = Config.configMap('moloch-clusters');
     if (!molochClusters) {
-      console.log("ERROR - sendSession is not configured");
+      console.log('ERROR - sendSession is not configured');
       return cb();
     }
 
     var sobj = molochClusters[options.cluster];
     if (!sobj) {
-      console.log("ERROR - moloch-clusters is not configured for " + options.cluster);
+      console.log('ERROR - moloch-clusters is not configured for ' + options.cluster);
       return cb();
     }
 
-    var info = url.parse(sobj.url + "/receiveSession?saveId=" + options.saveId);
+    var info = url.parse(sobj.url + '/receiveSession?saveId=' + options.saveId);
     addAuth(info, options.user, options.nodeName, sobj.serverSecret || sobj.passwordSecret);
-    info.method = "POST";
+    info.method = 'POST';
 
-    var result = "";
-    var client = info.protocol === "https:"?https:http;
-    info.agent = (client === http?internals.httpAgent:internals.httpsAgent);
+    var result = '';
+    var client = info.protocol === 'https:' ? https : http;
+    info.agent = (client === http ? internals.httpAgent : internals.httpsAgent);
     addCaTrust(info, options.nodeName);
-    var preq = client.request(info, function(pres) {
+    var preq = client.request(info, function (pres) {
       pres.on('data', function (chunk) {
         result += chunk;
       });
       pres.on('end', function () {
         result = JSON.parse(result);
         if (!result.success) {
-          console.log("ERROR sending session ", result);
+          console.log('ERROR sending session ', result);
         }
         cb();
       });
     });
 
     preq.on('error', function (e) {
-      console.log("ERROR - Couldn't connect to ", info, "\nerror=", e);
+      console.log("ERROR - Couldn't connect to ", info, '\nerror=', e);
       cb();
     });
 
@@ -8098,7 +8560,7 @@ function sendSessionWorker(options, cb) {
 
 internals.sendSessionQueue = async.queue(sendSessionWorker, 10);
 
-app.get('/:nodeName/sendSession/:id', checkProxyRequest, function(req, res) {
+app.get('/:nodeName/sendSession/:id', checkProxyRequest, function (req, res) {
   noCache(req, res);
   res.statusCode = 200;
 
@@ -8116,7 +8578,7 @@ app.get('/:nodeName/sendSession/:id', checkProxyRequest, function(req, res) {
   });
 });
 
-app.post('/:nodeName/sendSessions', checkProxyRequest, function(req, res) {
+app.post('/:nodeName/sendSessions', checkProxyRequest, function (req, res) {
   noCache(req, res);
   res.statusCode = 200;
 
@@ -8129,7 +8591,7 @@ app.post('/:nodeName/sendSessions', checkProxyRequest, function(req, res) {
 
   var count = 0;
   var ids = queryValueToArray(req.body.ids);
-  ids.forEach(function(id) {
+  ids.forEach(function (id) {
     var options = {
       user: req.user,
       cluster: req.query.cluster,
@@ -8149,13 +8611,12 @@ app.post('/:nodeName/sendSessions', checkProxyRequest, function(req, res) {
   });
 });
 
+function sendSessionsList (req, res, list) {
+  if (!list) { return res.molochError(200, 'Missing list of sessions'); }
 
-function sendSessionsList(req, res, list) {
-  if (!list) { return res.molochError(200, "Missing list of sessions"); }
+  var saveId = Config.nodeName() + '-' + new Date().getTime().toString(36);
 
-  var saveId = Config.nodeName() + "-" + new Date().getTime().toString(36);
-
-  async.eachLimit(list, 10, function(item, nextCb) {
+  async.eachLimit(list, 10, function (item, nextCb) {
     var fields = item._source || item.fields;
     let sid = Db.session2Sid(item);
     isLocalView(fields.node, function () {
@@ -8180,13 +8641,13 @@ function sendSessionsList(req, res, list) {
         setImmediate(nextCb);
       });
     });
-  }, function(err) {
-    return res.end(JSON.stringify({success: true, text: "Sending of " + list.length + " sessions complete"}));
+  }, function (err) {
+    return res.end(JSON.stringify({ success: true, text: 'Sending of ' + list.length + ' sessions complete' }));
   });
 }
 
 var qlworking = {};
-function sendSessionsListQL(pOptions, list, nextQLCb) {
+function sendSessionsListQL (pOptions, list, nextQLCb) {
   if (!list) {
     return;
   }
@@ -8202,11 +8663,10 @@ function sendSessionsListQL(pOptions, list, nextQLCb) {
 
   var keys = Object.keys(nodes);
 
-  var count = 0;
-  async.eachLimit(keys, 15, function(node, nextCb) {
+  async.eachLimit(keys, 15, function (node, nextCb) {
     isLocalView(node, function () {
       var sent = 0;
-      nodes[node].forEach(function(item) {
+      nodes[node].forEach(function (item) {
         var options = {
           id: item,
           nodeName: node
@@ -8224,45 +8684,44 @@ function sendSessionsListQL(pOptions, list, nextQLCb) {
     },
     function () {
       // Get from remote DISK
-      getViewUrl(node, function(err, viewUrl, client) {
+      getViewUrl(node, function (err, viewUrl, client) {
         var info = url.parse(viewUrl);
-        info.method = "POST";
-        info.path = Config.basePath(node) + node + "/sendSessions?saveId=" + pOptions.saveId + "&cluster=" + pOptions.cluster;
-        info.agent = (client === http?internals.httpAgent:internals.httpsAgent);
+        info.method = 'POST';
+        info.path = Config.basePath(node) + node + '/sendSessions?saveId=' + pOptions.saveId + '&cluster=' + pOptions.cluster;
+        info.agent = (client === http ? internals.httpAgent : internals.httpsAgent);
         if (pOptions.tags) {
-          info.path += "&tags=" + pOptions.tags;
+          info.path += '&tags=' + pOptions.tags;
         }
         addAuth(info, pOptions.user, node);
         addCaTrust(info, node);
-        var preq = client.request(info, function(pres) {
+        var preq = client.request(info, function (pres) {
           pres.on('data', function (chunk) {
-            qlworking[info.path] = "data";
+            qlworking[info.path] = 'data';
           });
           pres.on('end', function () {
             delete qlworking[info.path];
-            count++;
             setImmediate(nextCb);
           });
         });
         preq.on('error', function (e) {
           delete qlworking[info.path];
-          console.log("ERROR - Couldn't proxy sendSession request=", info, "\nerror=", e);
+          console.log("ERROR - Couldn't proxy sendSession request=", info, '\nerror=', e);
           setImmediate(nextCb);
         });
-        preq.setHeader('content-type', "application/x-www-form-urlencoded");
-        preq.write("ids=");
-        preq.write(nodes[node].join(","));
+        preq.setHeader('content-type', 'application/x-www-form-urlencoded');
+        preq.write('ids=');
+        preq.write(nodes[node].join(','));
         preq.end();
-        qlworking[info.path] = "sent";
+        qlworking[info.path] = 'sent';
       });
     });
-  }, function(err) {
+  }, function (err) {
     nextQLCb();
   });
 }
 
-app.post('/receiveSession', [noCacheJson], function receiveSession(req, res) {
-  if (!req.query.saveId) { return res.molochError(200, "Missing saveId"); }
+app.post('/receiveSession', [noCacheJson], function receiveSession (req, res) {
+  if (!req.query.saveId) { return res.molochError(200, 'Missing saveId'); }
 
   req.query.saveId = req.query.saveId.replace(/[^-a-zA-Z0-9_]/g, '');
 
@@ -8271,7 +8730,7 @@ app.post('/receiveSession', [noCacheJson], function receiveSession(req, res) {
 
   var saveId = receiveSession.saveIds[req.query.saveId];
   if (!saveId) {
-    saveId = receiveSession.saveIds[req.query.saveId] = {start: 0};
+    saveId = receiveSession.saveIds[req.query.saveId] = { start: 0 };
   }
 
   var sessionlen = -1;
@@ -8282,7 +8741,7 @@ app.post('/receiveSession', [noCacheJson], function receiveSession(req, res) {
   var file;
   var writeHeader;
 
-  function makeFilename(cb) {
+  function makeFilename (cb) {
     if (saveId.filename) {
       return cb(saveId.filename);
     }
@@ -8293,24 +8752,24 @@ app.post('/receiveSession', [noCacheJson], function receiveSession(req, res) {
     }
 
     saveId.inProgress = 1;
-    Db.getSequenceNumber("fn-" + Config.nodeName(), function (err, seq) {
-      var filename = Config.get("pcapDir") + "/" + Config.nodeName() + "-" + seq + "-" + req.query.saveId + ".pcap";
-      saveId.seq      = seq;
-      Db.indexNow("files", "file", Config.nodeName() + "-" + saveId.seq, {num: saveId.seq, name: filename, first: session.firstPacket, node: Config.nodeName(), filesize: -1, locked: 1}, function() {
+    Db.getSequenceNumber('fn-' + Config.nodeName(), function (err, seq) {
+      var filename = Config.get('pcapDir') + '/' + Config.nodeName() + '-' + seq + '-' + req.query.saveId + '.pcap';
+      saveId.seq = seq;
+      Db.indexNow('files', 'file', Config.nodeName() + '-' + saveId.seq, { num: saveId.seq, name: filename, first: session.firstPacket, node: Config.nodeName(), filesize: -1, locked: 1 }, function () {
         cb(filename);
         saveId.filename = filename; // Don't set the saveId.filename until after the first request completes its callback.
       });
     });
   }
 
-  function saveSession() {
+  function saveSession () {
     var id = session.id;
     delete session.id;
-    Db.indexNow(Db.sid2Index(id), "session", Db.sid2Id(id), session, function(err, info) {
+    Db.indexNow(Db.sid2Index(id), 'session', Db.sid2Id(id), session, function (err, info) {
     });
   }
 
-  function chunkWrite(chunk) {
+  function chunkWrite (chunk) {
     // Write full chunk if first packet and writeHeader or not first packet
     if (writeHeader || written !== 0) {
       writeHeader = false;
@@ -8321,7 +8780,7 @@ app.post('/receiveSession', [noCacheJson], function receiveSession(req, res) {
     written += chunk.length; // Pretend we wrote it all
   }
 
-  req.on('data', function(chunk) {
+  req.on('data', function (chunk) {
     // If the file is open, just write the current chunk
     if (file) {
       return chunkWrite(chunk);
@@ -8337,13 +8796,13 @@ app.post('/receiveSession', [noCacheJson], function receiveSession(req, res) {
     // Found the lengths
     if (sessionlen === -1 && (buffer.length >= 12)) {
       sessionlen = buffer.readUInt32BE(0);
-      filelen    = buffer.readUInt32BE(8);
+      filelen = buffer.readUInt32BE(8);
       buffer = buffer.slice(12);
     }
 
     // If we know the session len and haven't read the session
     if (sessionlen !== -1 && !session && buffer.length >= sessionlen) {
-      session = JSON.parse(buffer.toString("utf8", 0, sessionlen));
+      session = JSON.parse(buffer.toString('utf8', 0, sessionlen));
       session.node = Config.nodeName();
       buffer = buffer.slice(sessionlen);
 
@@ -8352,13 +8811,13 @@ app.post('/receiveSession', [noCacheJson], function receiveSession(req, res) {
 
         makeFilename(function (filename) {
           req.resume();
-          session.packetPos[0] = - saveId.seq;
-          session.fileId       = [saveId.seq];
+          session.packetPos[0] = -saveId.seq;
+          session.fileId = [saveId.seq];
 
           if (saveId.start === 0) {
-            file = fs.createWriteStream(filename, {flags: "w"});
+            file = fs.createWriteStream(filename, { flags: 'w' });
           } else {
-            file = fs.createWriteStream(filename, {start: saveId.start, flags: "r+"});
+            file = fs.createWriteStream(filename, { start: saveId.start, flags: 'r+' });
           }
           writeHeader = saveId.start === 0;
 
@@ -8388,35 +8847,35 @@ app.post('/receiveSession', [noCacheJson], function receiveSession(req, res) {
     }
   });
 
-  req.on('end', function(chunk) {
+  req.on('end', function (chunk) {
     if (file) {
       file.end();
     }
-    return res.send({success: true});
+    return res.send({ success: true });
   });
 });
 
-app.post('/sendSessions', function(req, res) {
+app.post('/sendSessions', function (req, res) {
   if (req.body.ids) {
     var ids = queryValueToArray(req.body.ids);
 
-    sessionsListFromIds(req, ids, ["node"], function(err, list) {
+    sessionsListFromIds(req, ids, ['node'], function (err, list) {
       sendSessionsList(req, res, list);
     });
   } else {
-    sessionsListFromQuery(req, res, ["node"], function(err, list) {
+    sessionsListFromQuery(req, res, ['node'], function (err, list) {
       sendSessionsList(req, res, list);
     });
   }
 });
 
-app.post('/upload', [checkCookieToken, multer({dest:'/tmp', limits: internals.uploadLimits}).single('file')], function (req, res) {
+app.post('/upload', [checkCookieToken, multer({ dest: '/tmp', limits: internals.uploadLimits }).single('file')], function (req, res) {
   var exec = require('child_process').exec;
 
   var tags = '';
   if (req.body.tags) {
     var t = req.body.tags.replace(/[^-a-zA-Z0-9_:,]/g, '').split(',');
-    t.forEach(function(tag) {
+    t.forEach(function (tag) {
       if (tag.length > 0) {
         tags += ' --tag ' + tag;
       }
@@ -8424,10 +8883,10 @@ app.post('/upload', [checkCookieToken, multer({dest:'/tmp', limits: internals.up
   }
 
   var cmd = Config.get('uploadCommand')
-     .replace('{TAGS}', tags)
-     .replace('{NODE}', Config.nodeName())
-     .replace('{TMPFILE}', req.file.path)
-     .replace('{CONFIG}', Config.getConfigFile());
+    .replace('{TAGS}', tags)
+    .replace('{NODE}', Config.nodeName())
+    .replace('{TMPFILE}', req.file.path)
+    .replace('{CONFIG}', Config.getConfigFile());
 
   console.log('upload command: ', cmd);
   exec(cmd, function (error, stdout, stderr) {
@@ -8445,30 +8904,30 @@ app.post('/upload', [checkCookieToken, multer({dest:'/tmp', limits: internals.up
   });
 });
 
-if (Config.get("regressionTests")) {
-  app.post('/shutdown', function(req, res) {
+if (Config.get('regressionTests')) {
+  app.post('/shutdown', function (req, res) {
     Db.close();
     process.exit(0);
-    throw new Error("Exiting");
+    throw new Error('Exiting');
   });
-  app.post('/flushCache', function(req, res) {
+  app.post('/flushCache', function (req, res) {
     Db.flushCache();
-    res.send("{}");
+    res.send('{}');
   });
-  app.get('/processCronQueries', function(req, res) {
+  app.get('/processCronQueries', function (req, res) {
     processCronQueries();
-    res.send("{}");
+    res.send('{}');
   });
 
   // Make sure all jobs have run and return
   app.get('/processHuntJobs', function (req, res) {
     processHuntJobs();
 
-    setTimeout(function checkHuntFinished() {
+    setTimeout(function checkHuntFinished () {
       if (internals.runningHuntJob) {
         setTimeout(checkHuntFinished, 1000);
       } else {
-        Db.search("hunts", "hunt", {query: {term: {status: "queued"}}}, function(err, result) {
+        Db.search('hunts', 'hunt', { query: { term: { status: 'queued' } } }, function (err, result) {
           if (result.hits.total > 0) {
             processHuntJobs();
             setTimeout(checkHuntFinished, 1000);
@@ -8481,20 +8940,20 @@ if (Config.get("regressionTests")) {
   });
 }
 
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
 // Cyberchef
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
 /* cyberchef endpoint - loads the src or dst packets for a session and
  * sends them to cyberchef */
 app.get('/cyberchef/:nodeName/session/:id', checkPermissions(['webEnabled']), checkProxyRequest, unsafeInlineCspHeader, (req, res) => {
-  processSessionIdAndDecode(req.params.id, 10000, function(err, session, results) {
+  processSessionIdAndDecode(req.params.id, 10000, function (err, session, results) {
     if (err) {
       console.log(`ERROR - /${req.params.nodeName}/session/${req.params.id}/cyberchef`, err);
-      return res.end("Error - " + err);
+      return res.end('Error - ' + err);
     }
 
     let data = '';
-    for (let i = (req.query.type !== 'dst'?0:1), ilen = results.length; i < ilen; i+=2) {
+    for (let i = (req.query.type !== 'dst' ? 0 : 1), ilen = results.length; i < ilen; i += 2) {
       data += results[i].data.toString('hex');
     }
 
@@ -8505,6 +8964,7 @@ app.get('/cyberchef/:nodeName/session/:id', checkPermissions(['webEnabled']), ch
 app.use(['/cyberchef/', '/modules/'], unsafeInlineCspHeader, (req, res) => {
   let found = false;
   let path = req.path.substring(1);
+
   if (req.baseUrl === '/modules') {
     res.setHeader('Content-Type', 'application/javascript; charset=UTF-8');
     path = 'modules/' + path;
@@ -8513,8 +8973,16 @@ app.use(['/cyberchef/', '/modules/'], unsafeInlineCspHeader, (req, res) => {
     path = `CyberChef_v${internals.CYBERCHEFVERSION}.html`;
   }
 
+  if (path === 'assets/main.js') {
+    res.setHeader('Content-Type', 'application/javascript; charset=UTF-8');
+  } else if (path === 'assets/main.css') {
+    res.setHeader('Content-Type', 'text/css');
+  } else if (path.endsWith('.png')) {
+    res.setHeader('Content-Type', 'image/png');
+  }
+
   fs.createReadStream(`public/CyberChef_v${internals.CYBERCHEFVERSION}.zip`)
-    .pipe(unzip.Parse())
+    .pipe(unzipper.Parse())
     .on('entry', function (entry) {
       if (entry.path === path) {
         entry.pipe(res);
@@ -8530,9 +8998,9 @@ app.use(['/cyberchef/', '/modules/'], unsafeInlineCspHeader, (req, res) => {
     });
 });
 
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
 // Vue app
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
 const Vue = require('vue');
 const vueServerRenderer = require('vue-server-renderer');
 
@@ -8566,12 +9034,12 @@ app.use(cspHeader, setCookie, (req, res) => {
   });
 
   let theme = req.user.settings.theme || 'default-theme';
-  if (theme.startsWith('custom1')) { theme  = 'custom-theme'; }
+  if (theme.startsWith('custom1')) { theme = 'custom-theme'; }
 
   let titleConfig = Config.get('titleTemplate', '_cluster_ - _page_ _-view_ _-expression_')
     .replace(/_cluster_/g, internals.clusterName)
-    .replace(/_userId_/g, req.user?req.user.userId:'-')
-    .replace(/_userName_/g, req.user?req.user.userName:'-');
+    .replace(/_userId_/g, req.user ? req.user.userId : '-')
+    .replace(/_userName_/g, req.user ? req.user.userName : '-');
 
   let limit = req.user.createEnabled ? Config.get('huntAdminLimit', 10000000) : Config.get('huntLimit', 1000000);
 
@@ -8608,89 +9076,88 @@ app.use(cspHeader, setCookie, (req, res) => {
   });
 });
 
-
-//////////////////////////////////////////////////////////////////////////////////
-//// Cron Queries
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// Cron Queries
+// ----------------------------------------------------------------------------
 
 /* Process a single cron query.  At max it will process 24 hours worth of data
  * to give other queries a chance to run.  Because its timestamp based and not
  * lastPacket based since 1.0 it now search all indices each time.
  */
-function processCronQuery(cq, options, query, endTime, cb) {
+function processCronQuery (cq, options, query, endTime, cb) {
   if (Config.debug > 2) {
-    console.log("CRON", cq.name, cq.creator, "- processCronQuery(", cq, options, query, endTime, ")");
+    console.log('CRON', cq.name, cq.creator, '- processCronQuery(', cq, options, query, endTime, ')');
   }
 
   var singleEndTime;
   var count = 0;
-  async.doWhilst(function(whilstCb) {
+  async.doWhilst(function (whilstCb) {
     // Process at most 24 hours
-    singleEndTime = Math.min(endTime, cq.lpValue + 24*60*60);
-    query.query.bool.filter[0] = {range: {timestamp: {gte: cq.lpValue*1000, lt: singleEndTime*1000}}};
+    singleEndTime = Math.min(endTime, cq.lpValue + 24 * 60 * 60);
+    query.query.bool.filter[0] = { range: { timestamp: { gte: cq.lpValue * 1000, lt: singleEndTime * 1000 } } };
 
     if (Config.debug > 2) {
-      console.log("CRON", cq.name, cq.creator, "- start:", new Date(cq.lpValue*1000), "stop:", new Date(singleEndTime*1000), "end:", new Date(endTime*1000), "remaining runs:", ((endTime-singleEndTime)/(24*60*60.0)));
+      console.log('CRON', cq.name, cq.creator, '- start:', new Date(cq.lpValue * 1000), 'stop:', new Date(singleEndTime * 1000), 'end:', new Date(endTime * 1000), 'remaining runs:', ((endTime - singleEndTime) / (24 * 60 * 60.0)));
     }
 
-    Db.search('sessions2-*', 'session', query, {scroll: '600s'}, function getMoreUntilDone(err, result) {
-      function doNext() {
+    Db.search('sessions2-*', 'session', query, { scroll: internals.esScrollTimeout }, function getMoreUntilDone (err, result) {
+      function doNext () {
         count += result.hits.hits.length;
 
         // No more data, all done
         if (result.hits.hits.length === 0) {
           Db.clearScroll({ body: { scroll_id: result._scroll_id } });
-          return setImmediate(whilstCb, "DONE");
+          return setImmediate(whilstCb, 'DONE');
         } else {
-          var document = { doc: { count: (query.count || 0) + count} };
-          Db.update("queries", "query", options.qid, document, {refresh: true}, function () {});
+          var document = { doc: { count: (query.count || 0) + count } };
+          Db.update('queries', 'query', options.qid, document, { refresh: true }, function () {});
         }
 
         query = {
           body: {
-            scroll_id: result._scroll_id,
+            scroll_id: result._scroll_id
           },
-          scroll: '600s'
+          scroll: internals.esScrollTimeout
         };
 
         Db.scroll(query, getMoreUntilDone);
       }
 
       if (err || result.error) {
-        console.log("cronQuery error", err, (result?result.error:null), "for", cq);
-        return setImmediate(whilstCb, "ERR");
+        console.log('cronQuery error', err, (result ? result.error : null), 'for', cq);
+        return setImmediate(whilstCb, 'ERR');
       }
 
       var ids = [];
       var hits = result.hits.hits;
       var i, ilen;
-      if (cq.action.indexOf("forward:") === 0) {
+      if (cq.action.indexOf('forward:') === 0) {
         for (i = 0, ilen = hits.length; i < ilen; i++) {
-          ids.push({id: hits[i]._id, node: hits[i]._source.node});
+          ids.push({ id: hits[i]._id, node: hits[i]._source.node });
         }
 
         sendSessionsListQL(options, ids, doNext);
-      } else if (cq.action.indexOf("tag") === 0) {
+      } else if (cq.action.indexOf('tag') === 0) {
         for (i = 0, ilen = hits.length; i < ilen; i++) {
           ids.push(hits[i]._id);
         }
 
         if (Config.debug > 1) {
-          console.log("CRON", cq.name, cq.creator, "- Updating tags:", ids.length);
+          console.log('CRON', cq.name, cq.creator, '- Updating tags:', ids.length);
         }
 
-        var tags = options.tags.split(",");
-        sessionsListFromIds(null, ids, ["tags", "node"], function(err, list) {
+        var tags = options.tags.split(',');
+        sessionsListFromIds(null, ids, ['tags', 'node'], function (err, list) {
           addTagsList(tags, list, doNext);
         });
       } else {
-        console.log("Unknown action", cq);
+        console.log('Unknown action', cq);
         doNext();
       }
     });
   }, function () {
     if (Config.debug > 1) {
-      console.log("CRON", cq.name, cq.creator, "- Continue process", singleEndTime, endTime);
+      console.log('CRON', cq.name, cq.creator, '- Continue process', singleEndTime, endTime);
     }
     return singleEndTime !== endTime;
   }, function (err) {
@@ -8698,32 +9165,32 @@ function processCronQuery(cq, options, query, endTime, cb) {
   });
 }
 
-function processCronQueries() {
+function processCronQueries () {
   if (internals.cronRunning) {
-    console.log("processQueries already running", qlworking);
+    console.log('processQueries already running', qlworking);
     return;
   }
   internals.cronRunning = true;
   if (Config.debug) {
-    console.log("CRON - cronRunning set to true");
+    console.log('CRON - cronRunning set to true');
   }
 
   var repeat;
-  async.doWhilst(function(whilstCb) {
+  async.doWhilst(function (whilstCb) {
     repeat = false;
-    Db.search("queries", "query", {size: 1000}, function(err, data) {
+    Db.search('queries', 'query', { size: 1000 }, function (err, data) {
       if (err) {
         internals.cronRunning = false;
-        console.log("processCronQueries", err);
+        console.log('processCronQueries', err);
         return setImmediate(whilstCb, err);
       }
       var queries = {};
-      data.hits.hits.forEach(function(item) {
+      data.hits.hits.forEach(function (item) {
         queries[item._id] = item._source;
       });
 
       // Delayed by the max Timeout
-      var endTime = Math.floor(Date.now()/1000) - internals.cronTimeout;
+      var endTime = Math.floor(Date.now() / 1000) - internals.cronTimeout;
 
       // Go thru the queries, fetch the user, make the query
       async.eachSeries(Object.keys(queries), function (qid, forQueriesCb) {
@@ -8731,14 +9198,14 @@ function processCronQueries() {
         var cluster = null;
 
         if (Config.debug > 1) {
-          console.log("CRON - Running", qid, cq);
+          console.log('CRON - Running', qid, cq);
         }
 
         if (!cq.enabled || endTime < cq.lpValue) {
           return forQueriesCb();
         }
 
-        if (cq.action.indexOf("forward:") === 0) {
+        if (cq.action.indexOf('forward:') === 0) {
           cluster = cq.action.substring(8);
         }
 
@@ -8758,8 +9225,8 @@ function processCronQueries() {
           let options = {
             user: user,
             cluster: cluster,
-            saveId: Config.nodeName() + "-" + new Date().getTime().toString(36),
-            tags: cq.tags.replace(/[^-a-zA-Z0-9_:,]/g, ""),
+            saveId: Config.nodeName() + '-' + new Date().getTime().toString(36),
+            tags: cq.tags.replace(/[^-a-zA-Z0-9_:,]/g, ''),
             qid: qid
           };
 
@@ -8767,6 +9234,7 @@ function processCronQueries() {
             molochparser.parser.yy = {
               emailSearch: user.emailSearch === true,
               fieldsMap: Config.getFieldsMap(),
+              dbFieldsMap: Config.getDBFieldsMap(),
               prefix: internals.prefix,
               lookups: lookups,
               lookupTypeMap: internals.lookupTypeMap
@@ -8775,8 +9243,8 @@ function processCronQueries() {
             let query = {
               from: 0,
               size: 1000,
-              query: {bool: {filter: [{}]}},
-              _source: ["_id", "node"]
+              query: { bool: { filter: [{}] } },
+              _source: ['_id', 'node']
             };
 
             try {
@@ -8801,13 +9269,13 @@ function processCronQueries() {
             lookupQueryItems(query.query.bool.filter, function (lerr) {
               processCronQuery(cq, options, query, endTime, function (count, lpValue) {
                 if (Config.debug > 1) {
-                  console.log("CRON - setting lpValue", new Date(lpValue*1000));
+                  console.log('CRON - setting lpValue', new Date(lpValue * 1000));
                 }
                 // Do the ES update
                 let document = {
                   doc: {
                     lpValue: lpValue,
-                    lastRun: Math.floor(Date.now()/1000),
+                    lastRun: Math.floor(Date.now() / 1000),
                     count: (queries[qid].count || 0) + count
                   }
                 };
@@ -8823,7 +9291,7 @@ function processCronQueries() {
 
                 // issue alert via notifier if the count has changed and it has been at least 10 minutes
                 if (cq.notifier && count && queries[qid].count !== document.doc.count &&
-                  (!cq.lastNotified || (Math.floor(Date.now()/1000) - cq.lastNotified >= 600))) {
+                  (!cq.lastNotified || (Math.floor(Date.now() / 1000) - cq.lastNotified >= 600))) {
                   let newMatchCount = document.doc.lastNotifiedCount ? (document.doc.count - document.doc.lastNotifiedCount) : document.doc.count;
                   let message = `*${cq.name}* cron query match alert:\n*${newMatchCount} new* matches\n*${document.doc.count} total* matches`;
                   issueAlert(cq.notifier, message, continueProcess);
@@ -8834,117 +9302,130 @@ function processCronQueries() {
             });
           });
         });
-      }, function(err) {
+      }, function (err) {
         if (Config.debug > 1) {
-          console.log("CRON - Finished one pass of all crons");
+          console.log('CRON - Finished one pass of all crons');
         }
         return setImmediate(whilstCb, err);
       });
     });
   }, function () {
     if (Config.debug > 1) {
-       console.log("CRON - Process again: ", repeat);
+      console.log('CRON - Process again: ', repeat);
     }
     return repeat;
   }, function (err) {
     if (Config.debug) {
-      console.log("CRON - Should be up to date");
+      console.log('CRON - Should be up to date');
     }
     internals.cronRunning = false;
   });
 }
 
-//////////////////////////////////////////////////////////////////////////////////
-//// Main
-//////////////////////////////////////////////////////////////////////////////////
+// ----------------------------------------------------------------------------
+// Main
+// ----------------------------------------------------------------------------
 function main () {
-  Db.checkVersion(MIN_DB_VERSION, Config.get("passwordSecret") !== undefined);
-  Db.healthCache(function(err, health) {
+  if (!fs.existsSync('./vueapp/dist/index.html')) {
+    console.log('WARNING - ./vueapp/dist/index.html missing - The viewer app must be run from inside the viewer directory');
+  }
+
+  Db.checkVersion(MIN_DB_VERSION, Config.get('passwordSecret') !== undefined);
+  Db.healthCache(function (err, health) {
     internals.clusterName = health.cluster_name;
   });
 
-  Db.nodesStats({metric: 'jvm,process,fs,os,indices,thread_pool'}, function (err, info) {
+  Db.nodesStats({ metric: 'jvm,process,fs,os,indices,thread_pool' }, function (err, info) {
     info.nodes.timestamp = new Date().getTime();
     internals.previousNodesStats.push(info.nodes);
   });
 
-  expireCheckAll();
-  setInterval(expireCheckAll, 60*1000);
-
   loadFields();
-  setInterval(loadFields, 2*60*1000);
+  setInterval(loadFields, 2 * 60 * 1000);
 
   loadPlugins();
 
-  createRightClicks();
-  setInterval(createRightClicks, 5*60*1000);
+  var pcapWriteMethod = Config.get('pcapWriteMethod');
+  var writer = internals.writers[pcapWriteMethod];
+  if (!writer || writer.localNode === true) {
+    expireCheckAll();
+    setInterval(expireCheckAll, 60 * 1000);
+  }
 
-  if (Config.get("cronQueries", false)) { // this viewer will process the cron queries
-    console.log("This node will process Cron Queries, delayed by", internals.cronTimeout, "seconds");
-    setInterval(processCronQueries, 60*1000);
+  createRightClicks();
+  setInterval(createRightClicks, 5 * 60 * 1000);
+
+  if (Config.get('cronQueries', false)) { // this viewer will process the cron queries
+    console.log('This node will process Cron Queries, delayed by', internals.cronTimeout, 'seconds');
+    setInterval(processCronQueries, 60 * 1000);
     setTimeout(processCronQueries, 1000);
     setInterval(processHuntJobs, 10000);
   }
 
   var server;
   if (Config.isHTTPS()) {
-    server = https.createServer({key: Config.keyFileData, cert: Config.certFileData, secureOptions: require('constants').SSL_OP_NO_TLSv1}, app);
+    server = https.createServer({
+      key: Config.keyFileData,
+      cert: Config.certFileData,
+      secureOptions: require('crypto').constants.SSL_OP_NO_TLSv1
+    }, app);
   } else {
     server = http.createServer(app);
   }
 
-  var viewHost = Config.get("viewHost", undefined);
-  if (internals.userNameHeader !== undefined && viewHost !== "localhost" && viewHost !== "127.0.0.1") {
-    console.log("SECURITY WARNING - when userNameHeader is set, viewHost should be localhost or use iptables");
+  var viewHost = Config.get('viewHost', undefined);
+  if (internals.userNameHeader !== undefined && viewHost !== 'localhost' && viewHost !== '127.0.0.1') {
+    console.log('SECURITY WARNING - when userNameHeader is set, viewHost should be localhost or use iptables');
   }
 
   server
     .on('error', function (e) {
-      console.log("ERROR - couldn't listen on port", Config.get("viewPort", "8005"), "is viewer already running?");
+      console.log("ERROR - couldn't listen on port", Config.get('viewPort', '8005'), 'is viewer already running?');
       process.exit(1);
-      throw new Error("Exiting");
+      throw new Error('Exiting');
     })
     .on('listening', function (e) {
-      console.log("Express server listening on port %d in %s mode", server.address().port, app.settings.env);
+      console.log('Express server listening on port %d in %s mode', server.address().port, app.settings.env);
     })
-    .listen(Config.get("viewPort", "8005"), viewHost);
+    .listen(Config.get('viewPort', '8005'), viewHost)
+    .setTimeout(20 * 60 * 1000);
 }
-//////////////////////////////////////////////////////////////////////////////////
-//// Command Line Parsing
-//////////////////////////////////////////////////////////////////////////////////
-function processArgs(argv) {
+// ----------------------------------------------------------------------------
+// Command Line Parsing
+// ----------------------------------------------------------------------------
+function processArgs (argv) {
   for (var i = 0, ilen = argv.length; i < ilen; i++) {
-    if (argv[i] === "--help") {
-      console.log("node.js [<options>]");
-      console.log("");
-      console.log("Options:");
-      console.log("  -c <config file>      Config file to use");
-      console.log("  -host <host name>     Host name to use, default os hostname");
-      console.log("  -n <node name>        Node name section to use in config file, default first part of hostname");
-      console.log("  --debug               Increase debug level, multiple are supported");
-      console.log("  --esprofile           Turn on profiling to es search queries");
-      console.log("  --insecure            Disable cert verification");
+    if (argv[i] === '--help') {
+      console.log('node.js [<options>]');
+      console.log('');
+      console.log('Options:');
+      console.log('  -c <config file>      Config file to use');
+      console.log('  -host <host name>     Host name to use, default os hostname');
+      console.log('  -n <node name>        Node name section to use in config file, default first part of hostname');
+      console.log('  --debug               Increase debug level, multiple are supported');
+      console.log('  --esprofile           Turn on profiling to es search queries');
+      console.log('  --insecure            Disable cert verification');
 
       process.exit(0);
     }
   }
 }
 processArgs(process.argv);
-//////////////////////////////////////////////////////////////////////////////////
-//// DB
-//////////////////////////////////////////////////////////////////////////////////
-Db.initialize({host: internals.elasticBase,
-               prefix: Config.get("prefix", ""),
-               usersHost: Config.get('usersElasticsearch')?Config.getArray('usersElasticsearch', ',', ''):undefined,
-               usersPrefix: Config.get("usersPrefix"),
-               nodeName: Config.nodeName(),
-               esClientKey: Config.get("esClientKey", null),
-               esClientCert: Config.get("esClientCert", null),
-               esClientKeyPass: Config.get("esClientKeyPass", null),
-               multiES: Config.get('multiES', false),
-               insecure: Config.insecure,
-               ca: loadCaTrust(internals.nodeName),
-               requestTimeout: Config.get("elasticsearchTimeout", 300),
-               esProfile: Config.esProfile,
-               debug: Config.debug
-              }, main);
+// ----------------------------------------------------------------------------
+// DB
+// ----------------------------------------------------------------------------
+Db.initialize({ host: internals.elasticBase,
+  prefix: Config.get('prefix', ''),
+  usersHost: Config.get('usersElasticsearch') ? Config.getArray('usersElasticsearch', ',', '') : undefined,
+  usersPrefix: Config.get('usersPrefix'),
+  nodeName: Config.nodeName(),
+  esClientKey: Config.get('esClientKey', null),
+  esClientCert: Config.get('esClientCert', null),
+  esClientKeyPass: Config.get('esClientKeyPass', null),
+  multiES: Config.get('multiES', false),
+  insecure: Config.insecure,
+  ca: Config.getCaTrustCerts(Config.nodeName()),
+  requestTimeout: Config.get('elasticsearchTimeout', 300),
+  esProfile: Config.esProfile,
+  debug: Config.debug
+}, main);

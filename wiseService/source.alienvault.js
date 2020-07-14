@@ -20,7 +20,6 @@ var fs             = require('fs')
   , csv            = require('csv')
   , wiseSource     = require('./wiseSource.js')
   , util           = require('util')
-  , HashTable      = require('hashtable')
   ;
 //////////////////////////////////////////////////////////////////////////////////
 function AlienVaultSource (api, section) {
@@ -32,7 +31,7 @@ function AlienVaultSource (api, section) {
     console.log(this.section, "- No export key defined");
     return;
   }
-  this.ips          = new HashTable();
+  this.ips          = new Map();
 
   this.api.addSource("alienvault", this);
 
@@ -74,7 +73,7 @@ AlienVaultSource.prototype.parseFile = function()
                                       this.reliabilityField, data[i][1],
                                       this.threatlevelField, data[i][2],
                                       this.activityField, data[i][3]);
-      this.ips.put(data[i][0], {num: 4, buffer: encoded});
+      this.ips.set(data[i][0], {num: 4, buffer: encoded});
       count++;
     }
     console.log(this.section, "- Done Loading", count, "elements");
@@ -93,7 +92,7 @@ AlienVaultSource.prototype.loadFile = function() {
   }
 
   // Get the new revision
-  wiseSource.request('http://reputation.alienvault.com/' + this.key + '/reputation.rev',  '/tmp/alienvault.rev', (statusCode) => {
+  wiseSource.request('https://reputation.alienvault.com/' + this.key + '/reputation.rev',  '/tmp/alienvault.rev', (statusCode) => {
 
     // If statusCode isn't success or not changed then try again if not already
     if (statusCode !== 200 && statusCode != 304) {
@@ -114,7 +113,7 @@ AlienVaultSource.prototype.loadFile = function() {
       }
 
       // Fetch new data file
-      wiseSource.request('http://reputation.alienvault.com/' + this.key + '/reputation.data',  '/tmp/alienvault.data', (statusCode) => {
+      wiseSource.request('https://reputation.alienvault.com/' + this.key + '/reputation.data',  '/tmp/alienvault.data', (statusCode) => {
         if (statusCode === 200) {
           this.loaded = true;
           this.parseFile();
@@ -141,7 +140,7 @@ AlienVaultSource.prototype.getIp = function(ip, cb) {
 };
 //////////////////////////////////////////////////////////////////////////////////
 AlienVaultSource.prototype.dump = function(res) {
-  this.ips.forEach((key, value) => {
+  this.ips.forEach((value, key) => {
     var str = "{key: \"" + key + "\", ops:\n" +
                wiseSource.result2Str(wiseSource.combineResults([value])) + "},\n";
     res.write(str);

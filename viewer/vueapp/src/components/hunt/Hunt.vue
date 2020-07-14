@@ -2,61 +2,63 @@
 
   <div class="packet-search-page ml-2 mr-2">
 
-    <!-- search navbar -->
-    <moloch-search
-      v-if="user.settings"
-      :start="sessionsQuery.start"
-      :timezone="user.settings.timezone"
-      :hide-actions="true"
-      :hide-interval="true"
-      @changeSearch="cancelAndLoad(true)">
-    </moloch-search> <!-- /search navbar -->
+    <MolochCollapsible>
+      <span class="fixed-header">
+        <!-- search navbar -->
+        <moloch-search
+          v-if="user.settings"
+          :start="sessionsQuery.start"
+          :timezone="user.settings.timezone"
+          :hide-actions="true"
+          :hide-interval="true"
+          @changeSearch="cancelAndLoad(true)">
+        </moloch-search> <!-- /search navbar -->
 
-    <div>&nbsp;</div>
-
-    <!-- hunt create navbar -->
-    <form class="hunt-create-navbar">
-      <div class="mt-1 ml-1 mr-1">
-        <button type="button"
-          v-if="!createFormOpened"
-          @click="createFormOpened = true"
-          class="btn btn-theme-tertiary btn-sm pull-right">
-          Create a packet search job
-        </button>
-        <span v-if="loadingSessions">
-          <div class="mt-1" style="display:inline-block;">
-            <span class="fa fa-spinner fa-spin fa-fw">
+        <!-- hunt create navbar -->
+        <form class="hunt-create-navbar">
+          <div class="p-2 form-inline justify-content-between flex-row-reverse">
+            <button type="button"
+              v-if="!createFormOpened"
+              @click="createFormOpened = true"
+              class="btn btn-theme-tertiary btn-sm pull-right">
+              Create a packet search job
+            </button>
+            <span v-if="loadingSessions">
+              <div class="mt-1" style="display:inline-block;">
+                <span class="fa fa-spinner fa-spin fa-fw">
+                </span>
+                Loading sessions...
+              </div>
+              <button type="button"
+                class="btn btn-warning btn-sm ml-3"
+                @click="cancelAndLoad">
+                <span class="fa fa-ban">
+                </span>&nbsp;
+                cancel
+              </button>
             </span>
-            Loading sessions...
-          </div>
-          <button type="button"
-            class="btn btn-warning btn-sm ml-3"
-            @click="cancelAndLoad">
-            <span class="fa fa-ban">
-            </span>&nbsp;
-            cancel
-          </button>
-        </span>
-        <span v-else-if="loadingSessionsError">
-          <div class="mt-1" style="display:inline-block;">
-            <span class="fa fa-exclamation-triangle fa-fw">
+            <span v-else-if="loadingSessionsError">
+              <div class="mt-1" style="display:inline-block;">
+                <span class="fa fa-exclamation-triangle fa-fw">
+                </span>
+                {{ loadingSessionsError }}
+              </div>
             </span>
-            {{ loadingSessionsError }}
+            <span v-else-if="!loadingSessions && !loadingSessionsError">
+              <div class="mt-1" style="display:inline-block;">
+                <span class="fa fa-info-circle fa-fw">
+                </span>&nbsp;
+                Creating a new packet search job will search the packets of
+                <strong>
+                  {{ sessions.recordsFiltered | commaString }}
+                </strong>
+                sessions.
+              </div>
+            </span>
           </div>
-        </span>
-        <span v-else-if="!loadingSessions && !loadingSessionsError">
-          <div class="mt-1" style="display:inline-block;">
-            <span class="fa fa-info-circle fa-fw">
-            </span>&nbsp;
-            Creating a new packet search job will search the packets of
-            <strong>
-              {{ sessions.recordsFiltered | commaString }}
-            </strong>
-            sessions.
-          </div>
-        </span>
-      </div>
-    </form> <!-- /hunt create navbar -->
+        </form> <!-- /hunt create navbar -->
+      </span>
+    </MolochCollapsible>
 
     <!-- loading overlay -->
     <moloch-loading
@@ -231,8 +233,14 @@
                     />
                     <label class="form-check-label"
                       for="regex">
-                      regex
+                      safe regex
                     </label>
+                    <a href="https://github.com/google/re2/wiki/Syntax"
+                      target="_blank"
+                      class="regex-help">
+                      <span class="fa fa-question-circle">
+                      </span>
+                    </a>
                   </div>
                   <div class="form-check form-check-inline">
                     <input class="form-check-input"
@@ -245,8 +253,14 @@
                     />
                     <label class="form-check-label"
                       for="hexregex">
-                      hex regex
+                      safe hex regex
                     </label>
+                    <a href="https://github.com/google/re2/wiki/Syntax"
+                      target="_blank"
+                      class="regex-help">
+                      <span class="fa fa-question-circle">
+                      </span>
+                    </a>
                   </div>
                 </div> <!-- /packet search text & text type -->
                 <!-- packet search direction -->
@@ -355,11 +369,16 @@
                 v-if="user.userId === runningJob.userId || user.createEnabled">
                 <button
                   @click="removeJob(runningJob, 'results')"
+                  :disabled="runningJob.disabled"
                   type="button"
                   v-b-tooltip.hover
                   title="Cancel and remove this job"
                   class="ml-1 pull-right btn btn-sm btn-danger">
-                  <span class="fa fa-trash-o fa-fw">
+                  <span v-if="!runningJob.loading"
+                    class="fa fa-trash-o fa-fw">
+                  </span>
+                  <span v-else
+                    class="fa fa-spinner fa-spin fa-fw">
                   </span>
                 </button>
                 <button type="button"
@@ -378,11 +397,16 @@
                   might take a minute to show up.
                 </b-tooltip>
                 <button @click="pauseJob(runningJob)"
+                  :disabled="runningJob.loading"
                   type="button"
                   v-b-tooltip.hover
                   title="Pause this job"
                   class="pull-right btn btn-sm btn-warning">
-                  <span class="fa fa-pause fa-fw">
+                  <span v-if="!runningJob.loading"
+                    class="fa fa-pause fa-fw">
+                  </span>
+                  <span v-else
+                    class="fa fa-spinner fa-spin fa-fw">
                   </span>
                 </button>
               </span>
@@ -677,11 +701,16 @@
                 <span v-if="user.userId === job.userId || user.createEnabled">
                   <button
                     @click="removeJob(job, 'results')"
+                    :disabled="job.loading"
                     type="button"
                     v-b-tooltip.hover
                     title="Remove this job from history"
                     class="ml-1 pull-right btn btn-sm btn-danger">
-                    <span class="fa fa-trash-o fa-fw">
+                    <span v-if="!job.loading"
+                      class="fa fa-trash-o fa-fw">
+                    </span>
+                    <span v-else
+                      class="fa fa-spinner fa-spin fa-fw">
                     </span>
                   </button>
                   <button type="button"
@@ -700,21 +729,31 @@
                     might take a minute to show up.
                   </b-tooltip>
                   <button v-if="job.status === 'running' || job.status === 'queued'"
+                    :disabled="job.loading"
                     @click="pauseJob(job)"
                     type="button"
                     v-b-tooltip.hover
                     title="Pause this job"
                     class="pull-right btn btn-sm btn-warning">
-                    <span class="fa fa-pause fa-fw">
+                    <span v-if="!job.loading"
+                      class="fa fa-pause fa-fw">
+                    </span>
+                    <span v-else
+                      class="fa fa-spinner fa-spin fa-fw">
                     </span>
                   </button>
-                  <button v-if="job.status === 'paused'"
+                  <button v-else-if="job.status === 'paused'"
+                    :disabled="job.loading"
                     @click="playJob(job)"
                     type="button"
                     v-b-tooltip.hover
                     title="Play this job"
                     class="pull-right btn btn-sm btn-theme-secondary">
-                    <span class="fa fa-play fa-fw">
+                    <span v-if="!job.loading"
+                      class="fa fa-play fa-fw">
+                    </span>
+                    <span v-else
+                      class="fa fa-spinner fa-spin fa-fw">
                     </span>
                   </button>
                 </span>
@@ -908,7 +947,7 @@
             <th>
               ID
             </th>
-            <th width="140px">&nbsp;</th>
+            <th width="180px">&nbsp;</th>
           </tr>
         </thead>
         <transition-group name="list"
@@ -992,11 +1031,16 @@
                 <span v-if="user.userId === job.userId || user.createEnabled">
                   <button
                     @click="removeJob(job, 'historyResults')"
+                    :disabled="job.loading"
                     type="button"
                     v-b-tooltip.hover
                     title="Remove this job from history"
                     class="ml-1 pull-right btn btn-sm btn-danger">
-                    <span class="fa fa-trash-o fa-fw">
+                    <span v-if="!job.loading"
+                      class="fa fa-trash-o fa-fw">
+                    </span>
+                    <span v-else
+                      class="fa fa-spinner fa-spin fa-fw">
                     </span>
                   </button>
                   <button type="button"
@@ -1020,6 +1064,14 @@
                     title="Rerun this hunt job using the current time frame and search criteria."
                     class="ml-1 pull-right btn btn-sm btn-theme-secondary">
                     <span class="fa fa-refresh fa-fw">
+                    </span>
+                  </button>
+                  <button type="button"
+                    @click="repeatJob(job)"
+                    v-b-tooltip.hover
+                    title="Repeat this hunt job using its time frame and search criteria."
+                    class="ml-1 pull-right btn btn-sm btn-theme-tertiary">
+                    <span class="fa fa-repeat fa-fw">
                     </span>
                   </button>
                 </span>
@@ -1153,6 +1205,7 @@ import ToggleBtn from '../utils/ToggleBtn';
 import MolochSearch from '../search/Search';
 import MolochLoading from '../utils/Loading';
 import MolochPaging from '../utils/Pagination';
+import MolochCollapsible from '../utils/CollapsibleWrapper';
 import FocusInput from '../utils/FocusInput';
 // import utils
 import Utils from '../utils/utils';
@@ -1168,6 +1221,7 @@ export default {
     ToggleBtn,
     MolochSearch,
     MolochLoading,
+    MolochCollapsible,
     MolochPaging
   },
   directives: { FocusInput },
@@ -1221,7 +1275,7 @@ export default {
       return { // sessions query defaults
         length: this.$route.query.length || 50, // page length
         start: 0, // first item index
-        facets: 1,
+        facets: 0,
         date: this.$store.state.timeRange,
         startTime: this.$store.state.time.startTime,
         stopTime: this.$store.state.time.stopTime,
@@ -1335,7 +1389,11 @@ export default {
         });
     },
     removeJob: function (job, arrayName) {
+      if (job.loading) { return; } // it's already trying to do something
+
       this.setErrorForList(arrayName, '');
+      this.$set(job, 'loading', true);
+
       this.axios.delete(`hunt/${job.id}`)
         .then((response) => {
           let array = this.results;
@@ -1350,30 +1408,43 @@ export default {
           }
           if (job.status === 'queued') { this.calculateQueue(); }
         }, (error) => {
+          this.$set(job, 'loading', false);
           this.setErrorForList(arrayName, error.text || error);
         });
     },
     pauseJob: function (job) {
+      if (job.loading) { return; } // it's already trying to do something
+
       this.setErrorForList('results', '');
+      this.$set(job, 'loading', true);
+
       this.axios.put(`hunt/${job.id}/pause`)
         .then((response) => {
           if (job.status === 'running') {
             this.loadData();
             return;
           }
-          // this.$set(job, 'status', 'paused');
+          this.$set(job, 'status', 'paused');
+          this.$set(job, 'loading', false);
           this.calculateQueue();
         }, (error) => {
+          this.$set(job, 'loading', false);
           this.setErrorForList('results', error.text || error);
         });
     },
     playJob: function (job) {
+      if (job.loading) { return; } // it's already trying to do something
+
       this.setErrorForList('results', '');
+      this.$set(job, 'loading', true);
+
       this.axios.put(`hunt/${job.id}/play`)
         .then((response) => {
           this.$set(job, 'status', 'queued');
+          this.$set(job, 'loading', false);
           this.calculateQueue();
         }, (error) => {
+          this.$set(job, 'loading', false);
           this.setErrorForList('results', error.text || error);
         });
     },
@@ -1427,6 +1498,16 @@ export default {
       this.jobSearchType = job.searchType;
       this.createFormOpened = true;
     },
+    repeatJob: function (job) {
+      this.$store.commit('setExpression', job.query.expression);
+      this.$store.commit('setTimeRange', '0');
+      this.$store.commit('setTime', {
+        stopTime: job.query.stopTime,
+        startTime: job.query.startTime
+      });
+      this.$store.commit('setIssueSearch', true);
+      this.rerunJob(job);
+    },
     /* helper functions ---------------------------------------------------- */
     setErrorForList: function (arrayName, errorText) {
       let errorArea = 'queuedListError';
@@ -1447,21 +1528,29 @@ export default {
     loadData: function () {
       respondedAt = undefined;
 
-      let expanded = [];
+      let loading = {};
+      let expanded = {};
+      let runningJobLoading = this.runningJob && this.runningJob.loading;
       let runningJobExpanded = this.runningJob && this.runningJob.expanded;
       if (this.results && this.results.length) {
-        // save the expanded ones
+        // save the expanded and loading ones
         for (let result of this.results) {
           if (result.expanded) {
-            expanded.push(result.id);
+            expanded[result.id] = true;
+          }
+          if (result.loading) {
+            loading[result.id] = true;
           }
         }
       }
       if (this.historyResults.data && this.historyResults.data.length) {
-        // save the expanded ones
+        // save the expanded and loading ones
         for (let result of this.historyResults.data) {
           if (result.expanded) {
-            expanded.push(result.id);
+            expanded[result.id] = true;
+          }
+          if (result.loading) {
+            loading[result.id] = true;
           }
         }
       }
@@ -1471,11 +1560,19 @@ export default {
       historyReq.then((response) => {
         this.historyListLoadingError = '';
 
-        if (expanded.length) {
-          // make sure expanded ones are still expanded
+        if (Object.keys(expanded).length || Object.keys(loading).length) {
           for (let result of response.data.data) {
-            if (expanded.indexOf(result.id) > -1) {
-              result.expanded = true;
+            // make sure expanded ones are still expanded
+            if (Object.keys(expanded).length) {
+              if (expanded[result.id]) {
+                result.expanded = true;
+              }
+            }
+            // make sure the loading ones are still loading
+            if (Object.keys(loading).length) {
+              if (loading[result.id]) {
+                result.loading = true;
+              }
             }
           }
         }
@@ -1494,11 +1591,19 @@ export default {
       queueReq.then((response) => {
         this.queuedListLoadingError = '';
 
-        if (expanded.length) {
-          // make sure expanded ones are still expanded
+        if (Object.keys(expanded).length || Object.keys(loading).length) {
           for (let result of response.data.data) {
-            if (expanded.indexOf(result.id) > -1) {
-              result.expanded = true;
+            // make sure expanded ones are still expanded
+            if (Object.keys(expanded).length) {
+              if (expanded[result.id]) {
+                result.expanded = true;
+              }
+            }
+            // make sure the loading ones are still loading
+            if (Object.keys(loading).length) {
+              if (loading[result.id]) {
+                result.loading = true;
+              }
             }
           }
         }
@@ -1506,6 +1611,7 @@ export default {
         this.results = response.data.data;
         this.runningJob = response.data.runningJob;
         if (this.runningJob) {
+          this.$set(this.runningJob, 'loading', runningJobLoading);
           this.$set(this.runningJob, 'expanded', runningJobExpanded);
           this.$set(
             this.runningJob,
@@ -1574,13 +1680,9 @@ export default {
 </script>
 
 <style scoped>
-/* packet search page, navbar, and content styles */
-.packet-search-page {
-  margin-top: 36px;
-}
 
 .packet-search-content {
-  margin-top: 100px;
+  margin-top: 10px;
 }
 
 .info-area {
@@ -1589,11 +1691,7 @@ export default {
 
 form.hunt-create-navbar {
   z-index: 4;
-  position: fixed;
-  top: 110px;
-  left: 0;
-  right: 0;
-  height: 40px;
+  height: 45px;
   background-color: var(--color-quaternary-lightest);
 
   -webkit-box-shadow: 0 0 16px -2px black;
@@ -1660,5 +1758,11 @@ form.hunt-create-navbar {
 }
 .list-move {
   transition: transform .8s;
+}
+
+/* regex help icon positioning */
+.regex-help {
+  margin-top: 3px;
+  margin-left: 6px;
 }
 </style>
