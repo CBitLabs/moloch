@@ -192,6 +192,9 @@ LOCAL int reader_libpcapfile_process(char *filename)
     struct group *gr;
     struct passwd *pw;
 
+    if (strcmp(filename, "-") == 0) {
+        goto process;
+    }
 
     if (!realpath(filename, offlinePcapFilename)) {
         LOG("ERROR - pcap open failed - Couldn't realpath file: '%s' with %d", filename, errno);
@@ -253,7 +256,7 @@ LOCAL int reader_libpcapfile_process(char *filename)
       }
     }
 
-
+process:
     errbuf[0] = 0;
     LOG ("Processing %s", filename);
     pktsToRead = config.pktsToRead;
@@ -555,9 +558,21 @@ LOCAL gboolean reader_libpcapfile_read()
 LOCAL void reader_libpcapfile_opened()
 {
     int dlt_to_linktype(int dlt);
+    int moloch_db_can_quit();
 
-    if (config.flushBetween)
+    if (config.flushBetween) {
         moloch_session_flush();
+        int rc[5];
+
+        // Pause until all packets and commands are done
+        while ((rc[0] = moloch_session_cmd_outstanding()) + (rc[1] = moloch_session_close_outstanding()) + (rc[2] = moloch_packet_outstanding()) + (rc[3] = moloch_session_monitoring()) + (rc[4] = moloch_db_can_quit()) > 0) {
+            if (config.debug) {
+                LOG("Waiting next file %d %d %d %d %d", rc[0], rc[1], rc[2], rc[3], rc[4]);
+            }
+            usleep(50000);
+            g_main_context_iteration(NULL, TRUE);
+        }
+    }
 
     moloch_packet_set_linksnap(dlt_to_linktype(pcap_datalink(pcap)) | pcap_datalink_ext(pcap), pcap_snapshot(pcap));
 

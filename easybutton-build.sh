@@ -17,8 +17,8 @@ MAXMIND=1.3.2
 PCAP=1.9.1
 CURL=7.68.0
 LUA=5.3.5
-DAQ=2.0.6
-NODE=10.18.1
+DAQ=2.0.7
+NODE=10.21.0
 
 TDIR="/data/moloch"
 DOPFRING=0
@@ -80,8 +80,16 @@ do
   esac
 done
 
+# Warn users
+echo ""
+echo "This script is for building Moloch from source and meant for people who enjoy pain. The prebuilt versions at https://molo.ch/#download are recommended for installation."
+echo ""
+
 # Check the existance of sudo
 command -v sudo >/dev/null 2>&1 || { echo >&2 "MOLOCH: sudo is required to be installed"; exit 1; }
+
+# Check if in right directory
+[ -f "./easybutton-build.sh" ] || { echo >&2 "MOLOCH: must run from moloch directory"; exit 1; }
 
 MAKE=make
 UNAME="$(uname)"
@@ -97,7 +105,7 @@ if [ -f "/etc/redhat-release" ] || [ -f "/etc/system-release" ]; then
 fi
 
 if [ -f "/etc/debian_version" ]; then
-  sudo apt-get -qq install wget curl libpcre3-dev uuid-dev libmagic-dev pkg-config g++ flex bison zlib1g-dev libffi-dev gettext libgeoip-dev make libjson-perl libbz2-dev libwww-perl libpng-dev xz-utils libffi-dev libssl-dev libreadline-dev libtool libyaml-dev dh-autoreconf libsocket6-perl libtest-differences-perl
+  sudo apt-get -qq install wget curl libpcre3-dev uuid-dev libmagic-dev pkg-config g++ flex bison zlib1g-dev libffi-dev gettext libgeoip-dev make libjson-perl libbz2-dev libwww-perl libpng-dev xz-utils libffi-dev libssl-dev libreadline-dev libtool libyaml-dev dh-autoreconf python libsocket6-perl libtest-differences-perl
   if [ $? -ne 0 ]; then
     echo "MOLOCH: apt-get failed"
     exit 1
@@ -114,13 +122,13 @@ fi
 
 if [ "$UNAME" = "Darwin" ]; then
   if [ -x "/opt/local/bin/port" ]; then
-    sudo port install libpcap yara glib2 jansson ossp-uuid libmaxminddb libmagic pcre lua libyaml
+    sudo port install libpcap yara glib2 jansson ossp-uuid libmaxminddb libmagic pcre lua libyaml wget
 
     echo "MOLOCH: Building capture"
     echo './configure --with-libpcap=/opt/local --with-yara=/opt/local LDFLAGS="-L/opt/local/lib" --with-glib2=no GLIB2_CFLAGS="-I/opt/local/include/glib-2.0 -I/opt/local/lib/glib-2.0/include" GLIB2_LIBS="-L/opt/local/lib -lglib-2.0 -lgmodule-2.0 -lgobject-2.0 -lgio-2.0" --with-pfring=no --with-curl=yes --with-lua=no LUA_CFLAGS="-I/opt/local/include" LUA_LIBS="-L/opt/local/lib -llua"'
     ./configure --with-libpcap=/opt/local --with-yara=/opt/local LDFLAGS="-L/opt/local/lib" --with-glib2=no GLIB2_CFLAGS="-I/opt/local/include/glib-2.0 -I/opt/local/lib/glib-2.0/include" GLIB2_LIBS="-L/opt/local/lib -lglib-2.0 -lgmodule-2.0 -lgobject-2.0 -lgio-2.0" --with-pfring=no --with-curl=yes --with-lua=no LUA_CFLAGS="-I/opt/local/include" LUA_LIBS="-L/opt/local/lib -llua"
   elif [ -x "/usr/local/bin/brew" ]; then
-    brew install libpcap yara glib jansson ossp-uuid libmaxminddb libmagic pcre lua libyaml openssl
+    brew install libpcap yara glib jansson ossp-uuid libmaxminddb libmagic pcre lua libyaml openssl wget autoconf automake
 
     echo "MOLOCH: Building capture"
     echo './configure --with-libpcap=/usr/local/opt/libpcap --with-yara=/usr/local LDFLAGS="-L/usr/local/lib" --with-glib2=no GLIB2_CFLAGS="-I/usr/local/include/glib-2.0 -I/usr/local/lib/glib-2.0/include -I/usr/local/opt/openssl@1.1/include" GLIB2_LIBS="-L/usr/local/lib -lglib-2.0 -lgmodule-2.0 -lgobject-2.0 -lgio-2.0 -L/usr/local/opt/openssl@1.1/lib" --with-pfring=no --with-curl=yes --with-lua=no LUA_CFLAGS="-I/usr/local/include/lua" LUA_LIBS="-L/usr/local/lib -llua'
@@ -254,7 +262,7 @@ else
 
     if [ ! -f "daq-$DAQ/api/.libs/libdaq_static.a" ]; then
       tar zxf daq-$DAQ.tar.gz
-      ( cd daq-$DAQ; ./configure --with-libpcap-includes=$TPWD/libpcap-$PCAP/ --with-libpcap-libraries=$TPWD/libpcap-$PCAP; make; sudo make install)
+      ( cd daq-$DAQ; autoreconf -f -i; ./configure --with-libpcap-includes=$TPWD/libpcap-$PCAP/ --with-libpcap-libraries=$TPWD/libpcap-$PCAP; make; sudo make install)
       if [ $? -ne 0 ]; then
         echo "MOLOCH: $MAKE failed"
         exit 1
@@ -303,14 +311,23 @@ if [ $DORMINSTALL -eq 1 ]; then
 fi
 
 # Install node if not already there
+case "$(uname -m)" in
+    "x86_64")
+        ARCH="x64"
+        ;;
+    "aarch64")
+        ARCH="arm64"
+        ;;
+esac
+
 if [ $DONODE -eq 1 ] && [ ! -f "$TDIR/bin/node" ]; then
     echo "MOLOCH: Installing node $NODE"
     sudo mkdir -p $TDIR/bin $TDIR/etc
     if [ ! -f node-v$NODE-linux-x64.tar.xz ] ; then
-        wget https://nodejs.org/download/release/v$NODE/node-v$NODE-linux-x64.tar.xz
+        wget https://nodejs.org/download/release/v$NODE/node-v$NODE-linux-$ARCH.tar.xz
     fi
-    sudo tar xfC node-v$NODE-linux-x64.tar.xz $TDIR
-    (cd $TDIR/bin ; sudo ln -sf ../node-v$NODE-linux-x64/bin/* .)
+    sudo tar xfC node-v$NODE-linux-$ARCH.tar.xz $TDIR
+    (cd $TDIR/bin ; sudo ln -sf ../node-v$NODE-linux-$ARCH/bin/* .)
 fi
 
 if [ $DOINSTALL -eq 1 ]; then

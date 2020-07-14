@@ -18,10 +18,9 @@
 'use strict';
 
 var fs             = require('fs')
-  , unzip          = require('unzip')
+  , unzipper       = require('unzipper')
   , wiseSource     = require('./wiseSource.js')
   , util           = require('util')
-  , HashTable      = require('hashtable')
   , request        = require('request')
   , exec           = require('child_process').exec
   ;
@@ -59,11 +58,11 @@ function ThreatStreamSource (api, section) {
     this.loadTypes();
     break;
   case "zip":
-    this.ips          = new HashTable();
-    this.domains      = new HashTable();
-    this.emails       = new HashTable();
-    this.md5s         = new HashTable();
-    this.urls         = new HashTable();
+    this.ips          = new Map();
+    this.domains      = new Map();
+    this.emails       = new Map();
+    this.md5s         = new Map();
+    this.urls         = new Map();
     this.cacheTimeout = -1;
     setImmediate(this.loadFile.bind(this));
     setInterval(this.loadFile.bind(this), 8*60*60*1000); // Reload file every 8 hours
@@ -84,7 +83,7 @@ function ThreatStreamSource (api, section) {
     sqlite3           = require('sqlite3');
     this.cacheTimeout = -1;
     this.openDb();
-    setInterval(this.openDb.bind(this), 5*60*1000);
+    setInterval(this.openDb.bind(this), 15*60*1000);
     ThreatStreamSource.prototype.getDomain = getDomainSqlite3;
     ThreatStreamSource.prototype.getIp     = getIpSqlite3;
     ThreatStreamSource.prototype.getMd5    = getMd5Sqlite3;
@@ -135,7 +134,7 @@ ThreatStreamSource.prototype.parseFile = function()
   this.urls.reserve(200000);
 
   fs.createReadStream('/tmp/threatstream.zip')
-    .pipe(unzip.Parse())
+    .pipe(unzipper.Parse())
     .on('entry', (entry) => {
       let bufs = [];
       entry.on('data', (buf) => {
@@ -173,18 +172,18 @@ ThreatStreamSource.prototype.parseFile = function()
 
 
           if (item.itype.match(/(_ip|anon_proxy|anon_vpn)/)) {
-            this.ips.put(item.srcip, {num: num, buffer: encoded});
+            this.ips.set(item.srcip, {num: num, buffer: encoded});
           } else if (item.itype.match(/_domain|_dns/)) {
-            this.domains.put(item.domain, {num: num, buffer: encoded});
+            this.domains.set(item.domain, {num: num, buffer: encoded});
           } else if (item.itype.match(/_email/)) {
-            this.emails.put(item.email, {num: num, buffer: encoded});
+            this.emails.set(item.email, {num: num, buffer: encoded});
           } else if (item.itype.match(/_md5/)) {
-            this.md5s.put(item.md5, {num: num, buffer: encoded});
+            this.md5s.set(item.md5, {num: num, buffer: encoded});
           } else if (item.itype.match(/_url/)) {
             if (item.url.lastIndexOf("http://", 0) === 0) {
               item.url = item.url.substring(7);
             }
-            this.urls.put(item.url, {num: num, buffer: encoded});
+            this.urls.set(item.url, {num: num, buffer: encoded});
           }
         });
         //console.log(this.section, "- Done", entry.path);
@@ -232,7 +231,7 @@ function dumpZip (res) {
   res.write("{");
   ["ips", "domains", "emails", "md5s", "urls"].forEach((ckey) => {
     res.write(`${ckey}: [\n`);
-    this[ckey].forEach((key, value) => {
+    this[ckey].forEach((value, key) => {
       var str = `{key: "${key}", ops:\n` +
         wiseSource.result2Str(wiseSource.combineResults([value])) + "},\n";
       res.write(str);
@@ -421,7 +420,9 @@ ThreatStreamSource.prototype.openDb = function() {
     // Repeat until we lock the DB
     if (err && err.code === "SQLITE_BUSY") {
       console.log(this.section, "Failed to lock sqlite DB", dbFile);
-      return realDb.run("BEGIN IMMEDIATE", beginImmediate);
+      return setTimeout(() => {
+        realDb.run("BEGIN IMMEDIATE", beginImmediate);
+      }, 30 * 1000);  // Try to lock in 30 seconds
     }
 
     console.log(this.section, "- Copying DB", dbStat.mtime);

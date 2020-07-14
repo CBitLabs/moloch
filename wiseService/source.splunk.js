@@ -21,7 +21,6 @@ var wiseSource     = require('./wiseSource.js')
   , util           = require('util')
   , splunkjs       = require('splunk-sdk')
   , iptrie         = require('iptrie')
-  , HashTable      = require('hashtable')
   ;
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -59,7 +58,7 @@ function SplunkSource (api, section) {
 
   this.service.login((err, success) => {
     if (err) {
-      console.log("ERROR - Couldn't login to splunk - ", err);
+      console.log("ERROR - Couldn't login to splunk - ", util.inspect(err, false, 50));
       return;
     }
     if (this.periodic) {
@@ -90,9 +89,9 @@ SplunkSource.prototype.periodicRefresh = function() {
 
     var cache;
     if (this.type === "ip") {
-      cache = {items: new HashTable(), trie: new iptrie.IPTrie()};
+      cache = {items: new Map(), trie: new iptrie.IPTrie()};
     } else {
-      cache = new HashTable();
+      cache = new Map();
     }
 
     for (let item of results.results) {
@@ -116,9 +115,9 @@ SplunkSource.prototype.periodicRefresh = function() {
       if (this.type === "ip") {
         var parts = key.split("/");
         cache.trie.add(parts[0], +parts[1] || (parts[0].includes(':')?128:32), newitem);
-        cache.items.put(key, newitem);
+        cache.items.set(key, newitem);
       } else {
-        cache.put(key, newitem);
+        cache.set(key, newitem);
       }
     }
     this.cache = cache;
@@ -132,7 +131,7 @@ SplunkSource.prototype.dump = function(res) {
   }
 
   var cache = this.type === "ip"?this.cache.items:this.cache;
-  cache.forEach((key, value) => {
+  cache.forEach((value, key) => {
     var str = `{key: "${key}", ops:\n` +
       wiseSource.result2Str(wiseSource.combineResults([this.tagsResult, value])) + "},\n";
     res.write(str);

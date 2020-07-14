@@ -381,13 +381,16 @@ void moloch_config_load()
         exit(1);
     }
 
+    if (config.debug == 0) {
+        config.debug = moloch_config_int(keyfile, "debug", 0, 0, 128);
+    }
+
     char **includes = moloch_config_str_list(keyfile, "includes", NULL);
     if (includes) {
         moloch_config_load_includes(includes);
         g_strfreev(includes);
         //LOG("KEYFILE:\n%s", g_key_file_to_data(molochKeyFile, NULL, NULL));
     }
-
 
     char *rotateIndex       = moloch_config_str(keyfile, "rotateIndex", "daily");
 
@@ -510,6 +513,7 @@ void moloch_config_load()
     config.timeouts[SESSION_TCP] = moloch_config_int(keyfile, "tcpTimeout", 60*8, 10, 0xffff);
     config.timeouts[SESSION_SCTP]= moloch_config_int(keyfile, "sctpTimeout", 60, 10, 0xffff);
     config.timeouts[SESSION_ESP] = moloch_config_int(keyfile, "espTimeout", 60*10, 10, 0xffff);
+    config.timeouts[SESSION_OTHER] = 60*10;
     config.tcpSaveTimeout        = moloch_config_int(keyfile, "tcpSaveTimeout", 60*8, 10, 60*120);
     int maxStreams               = moloch_config_int(keyfile, "maxStreams", 1500000, 1, 16777215);
     config.maxPackets            = moloch_config_int(keyfile, "maxPackets", 10000, 1, 0xffff);
@@ -558,7 +562,7 @@ void moloch_config_load()
     config.maxStreams[SESSION_SCTP] = MAX(100, maxStreams/config.packetThreads/20);
     config.maxStreams[SESSION_ICMP] = MAX(100, maxStreams/config.packetThreads/200);
     config.maxStreams[SESSION_ESP] = MAX(100, maxStreams/config.packetThreads/200);
-
+    config.maxStreams[SESSION_OTHER] = MAX(100, maxStreams/config.packetThreads/20);
 
     gchar **saveUnknownPackets     = moloch_config_str_list(keyfile, "saveUnknownPackets", NULL);
     if (saveUnknownPackets) {
@@ -719,7 +723,7 @@ void moloch_config_load_header(char *section, char *group, char *helpBase, char 
                                                    NULL);
         snprintf(name, sizeof(name), "%s", keys[k]);
         int type = 0;
-        int t = 0;
+        MolochFieldType t = MOLOCH_FIELD_TYPE_INT;
         int unique = 1;
         int count  = 0;
         char *kind = 0;

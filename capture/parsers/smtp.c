@@ -118,13 +118,16 @@ LOCAL void smtp_email_add_value(MolochSession_t *session, int pos, char *s, int 
     case MOLOCH_FIELD_TYPE_INT:
     case MOLOCH_FIELD_TYPE_INT_ARRAY:
     case MOLOCH_FIELD_TYPE_INT_HASH:
+    case MOLOCH_FIELD_TYPE_INT_GHASH:
         moloch_field_int_add(pos, session, atoi(s));
         break;
     case MOLOCH_FIELD_TYPE_STR:
     case MOLOCH_FIELD_TYPE_STR_ARRAY:
     case MOLOCH_FIELD_TYPE_STR_HASH:
+    case MOLOCH_FIELD_TYPE_STR_GHASH:
         moloch_field_string_add(pos, session, s, l, TRUE);
         break;
+    case MOLOCH_FIELD_TYPE_IP:
     case MOLOCH_FIELD_TYPE_IP_GHASH:
     {
         int i;
@@ -137,6 +140,9 @@ LOCAL void smtp_email_add_value(MolochSession_t *session, int pos, char *s, int 
         g_strfreev(parts);
         break;
     }
+    case MOLOCH_FIELD_TYPE_CERTSINFO:
+        // Unsupported
+        break;
     } /* SWITCH */
 }
 /******************************************************************************/
@@ -151,7 +157,7 @@ LOCAL char * smtp_quoteable_decode_inplace(char *str, gsize *olen)
         switch(str[ipos]) {
         case '=':
             if (str[ipos+1] && str[ipos+2] && str[ipos+1] != '\n') {
-                str[opos] = moloch_hex_to_char[(unsigned char)str[ipos+1]][(unsigned char)str[ipos+2]];
+                str[opos] = (char)moloch_hex_to_char[(unsigned char)str[ipos+1]][(unsigned char)str[ipos+2]];
                 ipos += 2;
             } else {
                 done = 1;
@@ -249,7 +255,7 @@ LOCAL void smtp_email_add_encoded(MolochSession_t *session, int pos, char *strin
 
         /* Start of encoded token */
         char *question = strchr(str+2, '?');
-        if (!question) {
+        if (!question || strlen(question) < 5) { /* ?[qQbB]?<encoded-text>?= support empty text*/
             moloch_field_string_add(pos, session, string, len, TRUE);
             return;
         }
@@ -270,9 +276,9 @@ LOCAL void smtp_email_add_encoded(MolochSession_t *session, int pos, char *strin
             *question = 0;
             *endquestion = 0;
 
-            if (question[3])
+            if (question[3]) {
                 g_base64_decode_inplace(question+3, &olen);
-            else
+            } else
                 olen = 0;
 
             char *fmt = smtp_gformat(str+2);
@@ -530,7 +536,7 @@ LOCAL int smtp_parser(MolochSession_t *session, void *uw, const unsigned char *d
                 *state = EMAIL_DATA_HEADER_RETURN;
                 break;
             }
-            g_string_append_c(line, *data);
+            g_string_append_c(line, (gchar)*data);
             break;
         }
         case EMAIL_DATA_HEADER_RETURN: {
@@ -649,7 +655,7 @@ LOCAL int smtp_parser(MolochSession_t *session, void *uw, const unsigned char *d
                 (*state)++;
                 break;
             }
-            g_string_append_c(line, *data);
+            g_string_append_c(line, (gchar)*data);
             break;
         }
         case EMAIL_MIME_DATA_RETURN:
@@ -962,7 +968,7 @@ void moloch_parser_init()
     fnField = moloch_field_define("email", "termfield",
         "email.fn", "Filenames", "email.filename",
         "Email attachment filenames",
-        MOLOCH_FIELD_TYPE_STR_HASH,  MOLOCH_FIELD_FLAG_CNT,
+        MOLOCH_FIELD_TYPE_STR_HASH,  MOLOCH_FIELD_FLAG_CNT | MOLOCH_FIELD_FLAG_FORCE_UTF8,
         "requiredRight", "emailSearch",
         (char *)NULL);
 
@@ -1043,9 +1049,7 @@ void moloch_parser_init()
     moloch_config_add_header(&emailHeaders, "received", receivedField);
     moloch_config_load_header("headers-email", "email", "Email header ", "email.", "email.header-", &emailHeaders, 0);
 
-    if (config.parseSMTP) {
-        moloch_parsers_classifier_register_tcp("smtp", NULL, 0, (unsigned char*)"HELO", 4, smtp_classify);
-        moloch_parsers_classifier_register_tcp("smtp", NULL, 0, (unsigned char*)"EHLO", 4, smtp_classify);
-        moloch_parsers_classifier_register_tcp("smtp", NULL, 0, (unsigned char*)"220 ", 4, smtp_classify);
-    }
+    moloch_parsers_classifier_register_tcp("smtp", NULL, 0, (unsigned char*)"HELO", 4, smtp_classify);
+    moloch_parsers_classifier_register_tcp("smtp", NULL, 0, (unsigned char*)"EHLO", 4, smtp_classify);
+    moloch_parsers_classifier_register_tcp("smtp", NULL, 0, (unsigned char*)"220 ", 4, smtp_classify);
 }
